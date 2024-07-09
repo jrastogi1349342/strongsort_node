@@ -149,7 +149,7 @@ class StrongSortPublisher(Node):
         self.cosplace_desc = CosPlace()
         self.best_cosplace_results_dict = {}
         
-        print(f"/{name_space}{video_source}\t/{name_space}/stereo/depth\t/{name_space}/stereo/left/camera_info\t/{name_space}/odom")
+        # print(f"/{name_space}{video_source}\t/{name_space}/stereo/depth\t/{name_space}/stereo/left/camera_info\t/{name_space}/odom")
         
         # TODO maybe add namespace here, but works 
         # Gets camera info, runs Yolo and StrongSORT, populates self.best_cosplace_results_dict
