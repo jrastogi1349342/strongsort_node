@@ -10,13 +10,13 @@ def generate_launch_description():
     return launch.LaunchDescription([
         launch_ros.actions.Node(
             package='strongsort_node', 
-            executable='track.py', # connects to entry point in setup.py
+            executable='track_ros_setup.py', # connects to entry point in setup.py
             name='strongsort', 
             output='screen',
             emulate_tty=True, 
             parameters=[
                 {'video_topic': '/rm_vlc_leftfront/image', 
-                 'name_space': 'hl2'}
+                 'name_space': 'A'}
             ]
         )
     ])

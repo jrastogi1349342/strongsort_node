@@ -7,13 +7,11 @@ from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
-# import rospy
 import message_filters
 from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection
 
 qos_pf = qos_profile_sensor_data
 
-import argparse
 
 import os
 # limit the number of cpus used by high performance libraries
@@ -62,230 +60,77 @@ from yolov7.utils.plots import plot_one_box
 from strong_sort.utils.parser import get_config
 from strong_sort.strong_sort import StrongSORT
 
-class StrongSortPublisher(Node): 
-    def __init__(self):
-    # def __init__(self, params, node):
-        super().__init__('strongsort_node')
-        check_requirements(requirements=ROOT / 'requirements.txt', exclude=('tensorboard', 'thop'))
-        
-        self.declare_parameters(
-            namespace='',
-            parameters=[
-                ('camera_type', 'gray'), # gray or color
-                ('yolo_weights', 'yolov7.pt'),
-                ('strong_sort_weights', 'osnet_x0_25_msmt17.pt'),
-                ('config_strongsort', 'src/strongsort_node/strong_sort/configs/strong_sort.yaml'), # may be changed
-                ('video_topic', "rm_vlc_leftfront/image"),
-                ('name_space', "hl2"), 
-                ('img_size', [640, 640]),
-                ('conf_thres', 0.5),
-                ('iou_thres', 0.5),
-                ('max_det', 1000),
-                ('device', '0'),
-                ('show_video', False), # changed from false
-                ('save_text', False),
-                ('save_conf', False),
-                ('save_crop', False),
-                ('save_vid', False),
-                ('no_save', False),
-                ('classes', [-1]),
-                ('agnostic_nms', False),
-                ('augment', False),
-                ('visualize', False),
-                ('update', False),
-                ('project', 'runs/track'),
-                ('name', "exp"),
-                ('exist_ok', False),
-                ('line_thickness', 3),
-                ('hide_labels', False),
-                ('hide_conf', False),
-                ('hide_class', False),
-                ('half', False),
-                ('dnn', False)
-            ]
-        )
-        
-        video_source = self.get_parameter('video_topic').get_parameter_value().string_value
-        name_space = self.get_parameter('name_space').get_parameter_value().string_value
-        
-        self.camera_type = self.get_parameter('camera_type').get_parameter_value().string_value
-        self.yolo_weights = self.get_parameter('yolo_weights').get_parameter_value().string_value
-        self.strong_sort_weights = self.get_parameter('strong_sort_weights').get_parameter_value().string_value
-        self.config_strongsort = self.get_parameter('config_strongsort').get_parameter_value().string_value
-        self.img_size = self.get_parameter('img_size').get_parameter_value().integer_array_value
-        self.conf_thres = self.get_parameter('conf_thres').get_parameter_value().double_value
-        self.iou_thres = self.get_parameter('iou_thres').get_parameter_value().double_value
-        self.max_det = self.get_parameter('max_det').get_parameter_value().integer_value
-        self.device = self.get_parameter('device').get_parameter_value().string_value
-        self.show_video = self.get_parameter('show_video').get_parameter_value().bool_value
-        self.save_text = self.get_parameter('save_text').get_parameter_value().bool_value
-        self.save_conf = self.get_parameter('save_conf').get_parameter_value().bool_value
-        self.save_crop = self.get_parameter('save_crop').get_parameter_value().bool_value
-        self.save_vid = self.get_parameter('save_vid').get_parameter_value().bool_value
-        self.no_save = self.get_parameter('no_save').get_parameter_value().bool_value
-        self.classes = self.get_parameter('classes').get_parameter_value().integer_array_value
-        self.agnostic_nms = self.get_parameter('agnostic_nms').get_parameter_value().bool_value
-        self.augment = self.get_parameter('augment').get_parameter_value().bool_value
-        self.visualize = self.get_parameter('visualize').get_parameter_value().bool_value
-        self.update = self.get_parameter('update').get_parameter_value().bool_value
-        self.project = self.get_parameter('project').get_parameter_value().string_value
-        self.name = self.get_parameter('name').get_parameter_value().string_value
-        self.exist_ok = self.get_parameter('exist_ok').get_parameter_value().bool_value
-        self.line_thickness = self.get_parameter('line_thickness').get_parameter_value().integer_value
-        self.hide_labels = self.get_parameter('hide_labels').get_parameter_value().bool_value
-        self.hide_conf = self.get_parameter('hide_conf').get_parameter_value().bool_value
-        self.hide_class = self.get_parameter('hide_class').get_parameter_value().bool_value
-        self.half = self.get_parameter('half').get_parameter_value().bool_value
-        self.dnn = self.get_parameter('dnn').get_parameter_value().bool_value
-
-        # To align with how original code works
-        if self.classes == [-1]: 
-            self.classes = None
-        
-        # self.params = params
-        # self.node = node
+class StrongSortPublisher(object): 
+    def __init__(self, params, node):
+        self.params = params
+        self.node = node
         
         # self.cosplace_desc = CosPlace(self.params, self.node)
         self.cosplace_desc = CosPlace()
         self.best_cosplace_results_dict = {}
         
-        # print(f"/{name_space}{video_source}\t/{name_space}/stereo/depth\t/{name_space}/stereo/left/camera_info\t/{name_space}/odom")
-        
-        # TODO maybe add namespace here, but works 
-        # Gets camera info, runs Yolo and StrongSORT, populates self.best_cosplace_results_dict
-        video_sub_sync = message_filters.Subscriber(self, 
-                                               Image, 
-                                                f"/{name_space}{video_source}", 
-                                                qos_profile=rclpy.qos.QoSProfile(
-                                                    reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                                                    history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                                                    durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-                                                    depth=5, 
-                                                    )
-                                                )
-        
-        # 34.5 cm distance to object, 46.5 cm width of object --> 34 degree offset from center for the two centered cameras
-        # Should use this angle to get angle/distance from center of HL2 but since distance between cameras is 0.0986 m, which 
-        # is negligible
-        depth_sub_sync = message_filters.Subscriber(
-            self, 
-            Image, 
-            f"/{name_space}/stereo/depth", 
-            qos_profile=rclpy.qos.QoSProfile(
-                reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-                depth=5, 
-            )
-        )
-        
-        cam_info_sync = message_filters.Subscriber(
-            self, 
-            CameraInfo, 
-            f"/{name_space}/stereo/left/camera_info", 
-            qos_profile=rclpy.qos.QoSProfile(
-                reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-                depth=5, 
-            )
-        )
-        
-        odom_sync = message_filters.Subscriber(
-            self, 
-            Odometry, 
-            f"/{name_space}/odom", 
-            qos_profile=rclpy.qos.QoSProfile(
-                reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-                depth=5, 
-            )
-        )
+
         
         # Sends highest last seen object detection ID of all other agents every 0.1 seconds
         # self.last_seen_det_clock = self.create_timer(0.1, self.last_seen_callback, clock=Clock())
         self.latest_det_dict = {0: -1, 1: -1} # TODO fix this after integration
-        self.global_desc_req_pub = self.create_publisher(LastSeenDetection, f"/{name_space}{video_source}/last", 10)
+        self.global_desc_req_pub = self.node.create_publisher(
+            LastSeenDetection, 
+            f"/{self.params['name_space']}{self.params['video_topic']}/last", 
+            10)
         
         # Subscribes to LastSeenDetection messages for highest non-unified object ID of current agent, 
         # and sends that robot a MOTGlobalDescriptors msg containing info on all non-unified object IDs 
         # (i.e. msg.obj_id for a given robot_id > latest_det_dict[msg.robot_id])
-        self.latest_class_sub = self.create_subscription(LastSeenDetection, f"/{name_space}{video_source}/last", self.latest_det_callback, 10)
+        self.latest_class_sub = self.node.create_subscription(
+            LastSeenDetection, 
+            f"/{self.params['name_space']}{self.params['video_topic']}/last", 
+            self.latest_det_callback, 
+            10)
         
         # Sends all descriptors with non-unified IDs to the other robot
         # Temporarily publishing all detections from callback for testing purposes
-        self.mot_pub = self.create_publisher(MOTGlobalDescriptors, f'/{name_space}{video_source}/mot', qos_profile=qos_pf)
-        
-        self.ts = message_filters.ApproximateTimeSynchronizer([video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync], queue_size=10, slop=0.5, allow_headerless=True)
-        self.ts.registerCallback(self.video_callback)
-        
-        
-        
-        # left_img_sync = message_filters.Subscriber(
-        #     self, 
-        #     Image, 
-        #     "/hl2/stereo/left/image_rect", 
-        #     qos_profile=rclpy.qos.QoSProfile(
-        #         reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-        #         history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-        #         durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-        #         depth=5, 
-        #     )
-        # )
-        
-        # right_img_sync = message_filters.Subscriber(
-        #     self, 
-        #     Image, 
-        #     "/hl2/stereo/right/image_rect", 
-        #     qos_profile=rclpy.qos.QoSProfile(
-        #         reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-        #         history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-        #         durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-        #         depth=5, 
-        #     )
-        # )
-        
-        # self.ts_scratch = message_filters.ApproximateTimeSynchronizer([left_img_sync, right_img_sync], queue_size=10, slop=0.5, allow_headerless=True)
-        # self.ts_scratch.registerCallback(self.depth_scratch_sync_callback)
-        # self.i = 1
-
+        self.mot_pub = self.node.create_publisher(
+            MOTGlobalDescriptors, 
+            f"/{self.params['name_space']}{self.params['video_topic']}/mot", 
+            qos_profile=qos_pf)
         
 
         self.orig_init()
         
+    # TODO use params for all below variables --> fix (pulled out ROS stuff for cleaner code)
     def orig_init(self): 
         self.bridge = CvBridge()
         
-        exp_name = self.yolo_weights
-        exp_name = self.name if self.name else exp_name + "_" + self.strong_sort_weights.stem
-        self.save_dir = increment_path(Path(self.project) / exp_name, exist_ok=self.exist_ok)  # increment run
+        exp_name = self.params['yolo_weights']
+        exp_name = self.params['name'] if self.params['name'] else exp_name + "_" + self.params['strong_sort_weights'].stem
+        self.save_dir = increment_path(Path(self.params['project']) / exp_name, exist_ok=self.params['exist_ok'])  # increment run
         self.save_dir = Path(self.save_dir)
-        (self.save_dir / 'tracks' if self.save_text else self.save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+        (self.save_dir / 'tracks' if self.params['save_text'] else self.save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
         # Load model
-        self.device = select_device(self.device)
+        self.device = select_device(self.params['device'])
         
         WEIGHTS.mkdir(parents=True, exist_ok=True)
-        self.model = attempt_load(Path(self.yolo_weights), map_location=self.device)  # load FP32 model
+        self.model = attempt_load(Path(self.params['yolo_weights']), map_location=self.device)  # load FP32 model
         self.names, = self.model.names,
         stride = self.model.stride.max().cpu().numpy()  # model stride
-        self.img_size = check_img_size(self.img_size[0], s=stride)  # check image size
+        self.img_size = check_img_size(self.params['img_size'][0], s=stride)  # check image size
 
         # Dataloader
         cudnn.benchmark = True  # set True to speed up constant image size inference
 
         # initialize StrongSORT
         self.cfg = get_config()
-        self.cfg.merge_from_file(self.config_strongsort)
+        self.cfg.merge_from_file(self.params['config_strongsort'])
 
         # Create as many strong sort instances as there are video sources
         self.strongsort_list = []
         self.strongsort_list.append(
             StrongSORT(
-                self.strong_sort_weights,
+                self.params['strong_sort_weights'],
                 self.device,
-                self.half,
+                self.params['half'],
                 max_dist=self.cfg.STRONGSORT.MAX_DIST,
                 max_iou_distance=self.cfg.STRONGSORT.MAX_IOU_DISTANCE,
                 max_age=self.cfg.STRONGSORT.MAX_AGE,
@@ -329,7 +174,7 @@ class StrongSortPublisher(Node):
         s = ''
         t1 = time_synchronized()
 
-        if self.camera_type == 'gray': 
+        if self.params['camera_type'] == 'gray': 
             img = self.bridge.imgmsg_to_cv2(orig_msg, "mono8") # (640, 480) from HL2 
 
             norm = img / 255 # Normalize
@@ -348,7 +193,7 @@ class StrongSortPublisher(Node):
         else: 
             return 
         
-        im = im.half() if self.half else im.float()  # uint8 to fp16/32
+        im = im.half() if self.params['half'] else im.float()  # uint8 to fp16/32
 
         t2 = time_synchronized()
         self.dt[0] += t2 - t1
@@ -358,11 +203,16 @@ class StrongSortPublisher(Node):
         self.dt[1] += t3 - t2
         
         # Inference
-        self.visualize = increment_path(self.save_dir / Path(self.path[0]).stem, mkdir=True) if self.visualize else False
+        self.visualize = increment_path(self.save_dir / Path(self.path[0]).stem, mkdir=True) if self.params['visualize'] else False
 
         # Apply NMS
         # self.conf_thres, self.iou_thres, self.classes
-        pred = non_max_suppression(pred[0], self.conf_thres, 0.1, None, self.agnostic_nms)
+        pred = non_max_suppression(
+            pred[0], 
+            self.params['conf_thres'], 
+            self.params['iou_thres'], 
+            self.params['classes'], 
+            self.params['agnostic_nms'])
         self.dt[2] += time_synchronized() - t3
         
         # disparity = self.bridge.imgmsg_to_cv2(orig_msg, "bgr8") 
@@ -372,7 +222,7 @@ class StrongSortPublisher(Node):
         for i, det in enumerate(pred):  # detections per image
             self.seen += 1
 
-            if self.camera_type == 'gray': 
+            if self.params['camera_type'] == 'gray': 
                 copy = img.copy()
                 copy_exp = np.expand_dims(copy, axis = 2)
                 im0 = np.repeat(copy_exp, 3, axis = 2)
@@ -388,7 +238,7 @@ class StrongSortPublisher(Node):
 
             txt_path = str(self.save_dir / 'tracks' / txt_file_name)  # im.txt
             s += '%gx%g ' % im.shape[2:]  # print string
-            imc = im0.copy() if self.save_crop else im0  # for save_crop
+            imc = im0.copy() if self.params['save_crop'] else im0  # for save_crop
 
             if self.cfg.STRONGSORT.ECC:  # camera motion compensation
                 self.strongsort_list[i].tracker.camera_update(self.prev_frames[i], self.curr_frames[i])
@@ -428,8 +278,9 @@ class StrongSortPublisher(Node):
                         brw = int(output[3]) if int(output[3]) < im0.shape[0] else im0.shape[0] - 1
                         brh = int(output[2]) if int(output[2]) < im0.shape[1] else im0.shape[1] - 1
                                                 
-                        angle_to_pt = (34 * (640 - ((tlw + brw) / 2)) / 320)
+                        angle_to_pt = (34 * (((tlh + brh) / 2) - 320) / 320)
                         median_depth_val = np.median(depth[tlw:brw, tlh:brh])
+                        print(f"Angle: {angle_to_pt}\tDepth: {median_depth_val}")
                         
                         # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
 
@@ -439,8 +290,8 @@ class StrongSortPublisher(Node):
                                 cropped = im0[tlw:brw, tlh:brh]
                                 new_embedding = self.cosplace_desc.compute_embedding(cropped)
                                 self.best_cosplace_results_dict[id] = MOTGlobalDescriptor(
-                                    header=Header(stamp=self.get_clock().now().to_msg()), 
-                                    robot_id=0, # msg.robot_id
+                                    header=Header(stamp=self.node.get_clock().now().to_msg()), 
+                                    robot_id=self.params['robot_id'], # msg.robot_id
                                     keyframe_id=0, # msg.keyframe_id
                                     obj_id=id, 
                                     obj_class_id=cls, 
@@ -454,8 +305,8 @@ class StrongSortPublisher(Node):
                             cropped = im0[tlw:brw, tlh:brh]
                             new_embedding = self.cosplace_desc.compute_embedding(cropped)
                             self.best_cosplace_results_dict[id] = MOTGlobalDescriptor(
-                                header=Header(stamp=self.get_clock().now().to_msg()), 
-                                robot_id=0, # msg.robot_id
+                                header=Header(stamp=self.node.get_clock().now().to_msg()), 
+                                robot_id=self.params['robot_id'], # msg.robot_id
                                 keyframe_id=0, # msg.keyframe_id
                                 obj_id=id, 
                                 obj_class_id=cls, 
@@ -466,19 +317,19 @@ class StrongSortPublisher(Node):
                                 descriptor=new_embedding
                             )
                         
-                        if self.save_text:
+                        if self.params['save_text']:
                             # Write MOT compliant results to file
                             with open(txt_path + '.txt', 'a') as f:
                                 f.write(('%g ' * 10 + '\n') % (self.frame_idx + 1, id, bbox_left,  # MOT format
                                                             bbox_top, bbox_w, bbox_h, -1, -1, -1, i))
 
-                        if self.save_vid or self.save_crop or self.show_video:  # Add bbox to image
+                        if self.params['save_vid'] or self.params['save_crop'] or self.params['show_video']:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
-                            label = None if self.hide_labels else (f'{id} {self.names[c]}' if self.hide_conf else \
-                                (f'{id} {conf:.2f}' if self.hide_class else f'{id} {self.names[c]} {conf:.2f}'))
+                            label = None if self.params['hide_labels'] else (f'{id} {self.names[c]}' if self.params['hide_conf'] else \
+                                (f'{id} {conf:.2f}' if self.params['hide_class'] else f'{id} {self.names[c]} {conf:.2f}'))
                             plot_one_box(bboxes, im0, label=label, color=self.colors[int(cls)], line_thickness=2)
-                            if self.save_crop:
+                            if self.params['save_crop']:
                                 txt_file_name = txt_file_name if (isinstance(self.path, list) and len(self.path) > 1) else ''
                                 self.save_one_box(bboxes, imc, file=self.save_dir / 'crops' / txt_file_name / self.names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
 
@@ -489,13 +340,13 @@ class StrongSortPublisher(Node):
                 print('No detections')
 
             # Stream results
-            if self.show_video:
+            if self.params['show_video']:
                 cv2.imshow(str(p), im0)
                 # cv2.imshow("Disparity", disparity)
                 cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
-            if self.save_vid:
+            if self.params['save_vid']:
                 if self.vid_path[i] != save_path:  # new video
                     self.vid_path[i] = save_path
                     if isinstance(self.vid_writer[i], cv2.VideoWriter):
@@ -558,17 +409,3 @@ class StrongSortPublisher(Node):
 
         self.i += 1
         
-
-
-
-def main(args=None): 
-    rclpy.init(args=args)
-    publisher = StrongSortPublisher()
-    
-    rclpy.spin(publisher)
-    
-    publisher.destroy_node()
-    rclpy.shutdown()
-    
-if __name__ == "__main__": 
-    main()

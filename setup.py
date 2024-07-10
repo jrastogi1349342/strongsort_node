@@ -23,7 +23,7 @@ setup(
     # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'strongsort_entry = strongsort_node.track:main'
+            'strongsort_entry = strongsort_node.track_ros_setup:main'
         ],
     },
 )

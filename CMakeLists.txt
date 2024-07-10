@@ -31,7 +31,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Change what pytorch models to use here
 install(
   PROGRAMS
-  strongsort_node/track.py
+  strongsort_node/track_ros_setup.py
   launch/strongsort_node_launch.py
   osnet_ain_x1_0_msmt17.pt
   osnet_x0_25_market1501.pt
