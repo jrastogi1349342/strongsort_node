@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.clock import Clock
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
-import message_filters
+from geometry_msgs.msg import Pose, Point, Quaternion
 from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection
+import math
+from scipy.spatial.transform import Rotation as R
 
 qos_pf = qos_profile_sensor_data
 
@@ -28,7 +28,6 @@ import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
 from PIL import Image as pil_image
-from pdb import set_trace as trace 
 
 
 from strongsort_node.cosplace import CosPlace
@@ -53,8 +52,8 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 
 from yolov7.models.experimental import attempt_load
-from yolov7.utils.general import (check_img_size, non_max_suppression, scale_coords, check_requirements, cv2,
-                                  check_imshow, xyxy2xywh, xywh2xyxy, clip_coords, increment_path, strip_optimizer, colorstr, check_file)
+from yolov7.utils.general import (check_img_size, non_max_suppression, cv2,xyxy2xywh, xywh2xyxy, 
+                                  clip_coords, increment_path)
 from yolov7.utils.torch_utils import select_device, time_synchronized
 from yolov7.utils.plots import plot_one_box
 from strong_sort.utils.parser import get_config
@@ -67,13 +66,13 @@ class StrongSortPublisher(object):
         
         # self.cosplace_desc = CosPlace(self.params, self.node)
         self.cosplace_desc = CosPlace()
-        self.best_cosplace_results_dict = {}
+        self.results_dict = {}
         
 
+        self.latest_det_dict = np.full(self.params['max_num_robots'], -1, dtype=int)
         
         # Sends highest last seen object detection ID of all other agents every 0.1 seconds
-        # self.last_seen_det_clock = self.create_timer(0.1, self.last_seen_callback, clock=Clock())
-        self.latest_det_dict = {0: -1, 1: -1} # TODO fix this after integration
+        self.last_seen_det_clock = self.create_timer(0.1, self.last_seen_callback, clock=Clock())
         self.global_desc_req_pub = self.node.create_publisher(
             LastSeenDetection, 
             f"/{self.params['name_space']}{self.params['video_topic']}/last", 
@@ -88,7 +87,8 @@ class StrongSortPublisher(object):
             self.latest_det_callback, 
             10)
         
-        # Sends all descriptors with non-unified IDs to the other robot
+        # Sends all descriptors with non-unified IDs to the other robot in callback of self.latest_class_sub
+        # subscriber (i.e. new info found)
         # Temporarily publishing all detections from callback for testing purposes
         self.mot_pub = self.node.create_publisher(
             MOTGlobalDescriptors, 
@@ -98,7 +98,6 @@ class StrongSortPublisher(object):
 
         self.orig_init()
         
-    # TODO use params for all below variables --> fix (pulled out ROS stuff for cleaner code)
     def orig_init(self): 
         self.bridge = CvBridge()
         
@@ -167,6 +166,47 @@ class StrongSortPublisher(object):
             # cv2.imwrite(f, crop)  # https://github.com/ultralytics/yolov5/issues/7007 chroma subsampling issue
             pil_image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).save(f, quality=95, subsampling=0)
         return crop
+    
+    # Range of approximately 2.5 m, or 8 ft, with stereoParams.maxDisparity = 48
+    def get_depth(self, depth_msg, left_cam_info_msg): 
+        img = self.bridge.imgmsg_to_cv2(depth_msg, "mono8")
+        
+        focal_len = 4.87 # mm +/- 5% (of one grayscale camera --> not sure if this is needed)
+        
+        
+        baseline_dist = 0.0986 # meters (distance between the two stereo cameras)
+        focal_len_left_cam = (left_cam_info_msg.k[0] + left_cam_info_msg.k[4]) / 2
+        
+        # 8.85 is approximate scaler for when stereoParams.maxDisparity = 48 --> distance in meters
+        depth = baseline_dist * focal_len_left_cam * 8.85 / img
+        
+        return depth
+    
+    # Take median of depth, and remove a bit of left and right sides because both cameras can't see 
+    # that part so depth is completely inaccurate
+    def depth_median(self, depth, tlw, tlh, brw, brh):
+        tlh = 30 if tlh < 30 else tlh
+        brh = 450 if brh > 450 else brh
+        
+        return np.median(depth[tlw:brw, tlh:brh])
+    
+    def angle_to_object(self, odom_quat, pitch_degrees, yaw_degrees): 
+        pitch_rad = 180 * pitch_degrees / math.pi
+        pitch_mtx = np.array([[math.cos(pitch_rad), 0, math.sin(pitch_rad)], 
+                             [0, 1, 0], 
+                             [-math.sin(pitch_rad), 0, math.cos(pitch_rad)]])
+    
+        yaw_rad = 180 * yaw_degrees / math.pi
+        yaw_mtx = np.array([[math.cos(yaw_rad), -math.sin(yaw_rad), 0], 
+                             [math.sin(yaw_rad), math.cos(yaw_rad), 0], 
+                             [0, 0, 1]])
+        
+        obj_rot_mtx = R.from_matrix(yaw_mtx * pitch_mtx)
+        
+        odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
+        
+        combined_rot_mtx = obj_rot_mtx * odom_rot_mtx
+        return combined_rot_mtx.as_euler('xyz', degrees=True)
         
     # video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync
     @torch.no_grad()
@@ -261,7 +301,7 @@ class StrongSortPublisher(object):
 
                 # draw boxes for visualization
                 if len(self.outputs[i]) > 0:
-                    for j, (output, conf_tensor) in enumerate(zip(self.outputs[i], confs)):
+                    for _, (output, conf_tensor) in enumerate(zip(self.outputs[i], confs)):
                         conf = conf_tensor.item()
     
                         bboxes = output[0:4]
@@ -277,44 +317,59 @@ class StrongSortPublisher(object):
                         tlh = int(output[0]) if int(output[0]) < im0.shape[1] else im0.shape[1] - 1
                         brw = int(output[3]) if int(output[3]) < im0.shape[0] else im0.shape[0] - 1
                         brh = int(output[2]) if int(output[2]) < im0.shape[1] else im0.shape[1] - 1
-                                                
-                        angle_to_pt = (34 * (((tlh + brh) / 2) - 320) / 320)
-                        median_depth_val = np.median(depth[tlw:brw, tlh:brh])
-                        print(f"Angle: {angle_to_pt}\tDepth: {median_depth_val}")
+                              
+                        pitch_to_obj = 67 * (((tlw + brw) / 2) - 320) / 320
+                        yaw_to_obj = 34 * (((tlh + brh) / 2) - 240) / 240
+                        median_depth_val = self.depth_median(depth, tlw, tlh, brw, brh)
+                        print(f"Angle: {yaw_to_obj}\tDepth: {median_depth_val}")
+                        
+                        # TODO test this
+                        overall_angles_to_obj = self.angle_to_object(odom_msg.pose.pose.orientation, pitch_to_obj, yaw_to_obj)
                         
                         # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
 
-                        if id in self.best_cosplace_results_dict: 
-                            old_info = self.best_cosplace_results_dict[id]
+                        if id in self.results_dict: 
+                            # Localization info needs to be as recent as possible
+                            self.results_dict[id].header = Header(stamp=self.node.get_clock().now().to_msg())
+                            self.results_dict[id].keyframe_id=0, # msg.keyframe_id, change 
+                            self.results_dict[id].curr_confidence = conf
+                            self.results_dict[id].angle_x = overall_angles_to_obj[0]
+                            self.results_dict[id].angle_y = overall_angles_to_obj[1]
+                            self.results_dict[id].angle_z = overall_angles_to_obj[2]
+                            self.results_dict[id].distance = median_depth_val
+                            self.results_dict[id].colocalization = Pose(
+                                    position=Point(x=2, y=0, z=0), 
+                                    orientation=Quaternion(x=0, y=0, z=0, w=1)
+                                )
+                            
+                            old_info = self.results_dict[id]
+                            # Feature descriptor should have highest confidence
                             if conf > old_info.confidence: 
                                 cropped = im0[tlw:brw, tlh:brh]
                                 new_embedding = self.cosplace_desc.compute_embedding(cropped)
-                                self.best_cosplace_results_dict[id] = MOTGlobalDescriptor(
-                                    header=Header(stamp=self.node.get_clock().now().to_msg()), 
-                                    robot_id=self.params['robot_id'], # msg.robot_id
-                                    keyframe_id=0, # msg.keyframe_id
-                                    obj_id=id, 
-                                    obj_class_id=cls, 
-                                    confidence=conf, 
-                                    odom=odom_msg, 
-                                    distance=median_depth_val, 
-                                    yaw_angle=angle_to_pt,
-                                    descriptor=new_embedding
-                                )
+                                self.results_dict[id].max_confidence = conf
+                                self.results_dict[id].best_descriptor = new_embedding
                         else: 
                             cropped = im0[tlw:brw, tlh:brh]
                             new_embedding = self.cosplace_desc.compute_embedding(cropped)
-                            self.best_cosplace_results_dict[id] = MOTGlobalDescriptor(
+                            self.results_dict[id] = MOTGlobalDescriptor(
                                 header=Header(stamp=self.node.get_clock().now().to_msg()), 
-                                robot_id=self.params['robot_id'], # msg.robot_id
+                                robot_id=self.params['robot_id'], 
+                                robot_id_to=1, # change
                                 keyframe_id=0, # msg.keyframe_id
                                 obj_id=id, 
                                 obj_class_id=cls, 
-                                confidence=conf, 
-                                odom=odom_msg, 
+                                max_confidence=conf,
+                                best_descriptor=new_embedding,
+                                curr_confidence=conf, 
+                                angle_x=overall_angles_to_obj[0], 
+                                angle_y=overall_angles_to_obj[1], 
+                                angle_z=overall_angles_to_obj[2], 
                                 distance=median_depth_val, 
-                                yaw_angle=angle_to_pt,
-                                descriptor=new_embedding
+                                colocalization=Pose(
+                                    position=Point(x=2, y=0, z=0), 
+                                    orientation=Quaternion(x=0, y=0, z=0, w=1)
+                                )
                             )
                         
                         if self.params['save_text']:
@@ -364,33 +419,18 @@ class StrongSortPublisher(object):
             self.prev_frames[i] = self.curr_frames[i]
             
         # TODO remove after more thorough testing
-        self.mot_pub.publish(MOTGlobalDescriptors(descriptors=list(self.best_cosplace_results_dict.values())))
+        self.mot_pub.publish(MOTGlobalDescriptors(descriptors=list(self.results_dict.values())))
             
-    # Range of approximately 2.5 m, or 8 ft, with stereoParams.maxDisparity = 48
-    def get_depth(self, depth_msg, left_cam_info_msg): 
-        img = self.bridge.imgmsg_to_cv2(depth_msg, "mono8")
-        
-        focal_len = 4.87 # mm +/- 5% (of one grayscale camera --> not sure if this is needed)
-        
-        
-        baseline_dist = 0.0986 # meters (distance between the two stereo cameras)
-        focal_len_left_cam = (left_cam_info_msg.k[0] + left_cam_info_msg.k[4]) / 2
-        
-        # 8.85 is approximate scaler for when stereoParams.maxDisparity = 48 --> distance in meters
-        depth = baseline_dist * focal_len_left_cam * 8.85 / img
-        
-        return depth
-        
 
 
     def last_seen_callback(self): 
         for id, last in self.latest_det_dict.items():
-            if id != 0: # 0 should be params['robot_id']
+            if id != self.params['robot_id']: 
                 self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=last))
     
     def latest_det_callback(self, msg): 
-        if msg.robot_id == 0: # 0 should be params['robot_id']
-            abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.best_cosplace_results_dict.items()))
+        if msg.robot_id == self.params['robot_id']: 
+            abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.results_dict.items()))
             self.mot_pub.publish(MOTGlobalDescriptors(descriptors=list(abbrev_descriptor_dict.values())))
             
             

@@ -19,8 +19,7 @@ ROOT = FILE.parents[0]  # yolov7 strongsort root directory
 WEIGHTS = ROOT / 'weights'
 
 
-from yolov7.utils.general import (check_img_size, non_max_suppression, scale_coords, check_requirements, cv2,
-                                  check_imshow, xyxy2xywh, xywh2xyxy, clip_coords, increment_path, strip_optimizer, colorstr, check_file)
+from yolov7.utils.general import check_requirements
 
 
 class StrongSortSetup(Node):
@@ -31,6 +30,8 @@ class StrongSortSetup(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
+                ('robot_id', 0), # change this in launch file for each robot
+                ('max_num_robots', 2), 
                 ('camera_type', 'gray'), # gray or color
                 ('yolo_weights', 'yolov7.pt'),
                 ('strong_sort_weights', 'osnet_x0_25_msmt17.pt'),
@@ -66,6 +67,9 @@ class StrongSortSetup(Node):
         )
         
         self.strongsort_params = {}
+        
+        self.strongsort_params['robot_id'] = self.get_parameter('robot_id').value
+        self.strongsort_params['max_num_robots'] = self.get_parameter('max_num_robots').value
         
         self.strongsort_params['video_topic'] = self.get_parameter('video_topic').value
         self.strongsort_params['name_space'] = self.get_parameter('name_space').value
@@ -127,6 +131,7 @@ class StrongSortSetup(Node):
         # 34.5 cm distance to object, 46.5 cm width of object --> 34 degree offset from center for the two centered cameras
         # Should use this angle to get angle/distance from center of HL2 but since distance between cameras is 0.0986 m, which 
         # is negligible
+        # 17.25 in dist to wall, 29.65 in wall height from 0 to 640 px
         depth_sub_sync = message_filters.Subscriber(
             self, 
             Image, 
@@ -162,6 +167,8 @@ class StrongSortSetup(Node):
                 depth=5, 
             )
         )
+         
+        #  Colocalization will eventually go here
                 
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync], 
@@ -169,7 +176,6 @@ class StrongSortSetup(Node):
             slop=0.5, 
             allow_headerless=True)
         self.ts.registerCallback(self.mot_publishers.video_callback)
-        
         
         
         # left_img_sync = message_filters.Subscriber(
