@@ -5,7 +5,7 @@ from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Pose, Point, Quaternion
+from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
 from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection
 import math
 from scipy.spatial.transform import Rotation as R
@@ -68,11 +68,10 @@ class StrongSortPublisher(object):
         self.cosplace_desc = CosPlace()
         self.results_dict = {}
         
-
-        self.latest_det_dict = np.full(self.params['max_num_robots'], -1, dtype=int)
+        self.latest_det_dict = [-1] * self.params['max_nb_robots']
         
         # Sends highest last seen object detection ID of all other agents every 0.1 seconds
-        self.last_seen_det_clock = self.create_timer(0.1, self.last_seen_callback, clock=Clock())
+        self.last_seen_det_clock = self.node.create_timer(0.1, self.last_seen_callback, clock=Clock())
         self.global_desc_req_pub = self.node.create_publisher(
             LastSeenDetection, 
             f"/{self.params['name_space']}{self.params['video_topic']}/last", 
@@ -92,7 +91,7 @@ class StrongSortPublisher(object):
         # Temporarily publishing all detections from callback for testing purposes
         self.mot_pub = self.node.create_publisher(
             MOTGlobalDescriptors, 
-            f"/{self.params['name_space']}{self.params['video_topic']}/mot", 
+            f"/{self.params['name_space']}/mot", 
             qos_profile=qos_pf)
         
 
@@ -191,12 +190,12 @@ class StrongSortPublisher(object):
         return np.median(depth[tlw:brw, tlh:brh])
     
     def angle_to_object(self, odom_quat, pitch_degrees, yaw_degrees): 
-        pitch_rad = 180 * pitch_degrees / math.pi
+        pitch_rad = math.pi * pitch_degrees / 180
         pitch_mtx = np.array([[math.cos(pitch_rad), 0, math.sin(pitch_rad)], 
                              [0, 1, 0], 
                              [-math.sin(pitch_rad), 0, math.cos(pitch_rad)]])
     
-        yaw_rad = 180 * yaw_degrees / math.pi
+        yaw_rad = math.pi * yaw_degrees / 180
         yaw_mtx = np.array([[math.cos(yaw_rad), -math.sin(yaw_rad), 0], 
                              [math.sin(yaw_rad), math.cos(yaw_rad), 0], 
                              [0, 0, 1]])
@@ -205,17 +204,19 @@ class StrongSortPublisher(object):
         
         odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
         
+        print(f"Obj rotation matrix: {obj_rot_mtx.as_euler('xyz', degrees=True)}\tOdom rotation matrix: {odom_rot_mtx.as_euler('xyz', degrees=True)}")
+        
         combined_rot_mtx = obj_rot_mtx * odom_rot_mtx
         return combined_rot_mtx.as_euler('xyz', degrees=True)
         
     # video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync
     @torch.no_grad()
-    def video_callback(self, orig_msg, depth_msg, cam_info, odom_msg): 
+    def video_callback(self, img_msg, depth_msg, cam_info, odom_msg): 
         s = ''
         t1 = time_synchronized()
 
         if self.params['camera_type'] == 'gray': 
-            img = self.bridge.imgmsg_to_cv2(orig_msg, "mono8") # (640, 480) from HL2 
+            img = self.bridge.imgmsg_to_cv2(img_msg, "mono8") # (640, 480) from HL2 
 
             norm = img / 255 # Normalize
             norm_expanded = np.expand_dims(norm, axis = 0) # (1, 640, 480)
@@ -224,7 +225,7 @@ class StrongSortPublisher(object):
             im = torch.from_numpy(np_exp).to(0) # torch.Size([1, 3, 480, 640])
 
         elif self.camera_type == 'color': # TODO test with Vision 60
-            img = self.bridge.imgmsg_to_cv2(orig_msg, "bgr8") # presumably (640, 480, 3) 
+            img = self.bridge.imgmsg_to_cv2(img_msg, "bgr8") # presumably (640, 480, 3) 
             norm = img / 255 # Normalize
             norm_transpose = np.transpose(norm, (2, 0, 1))
             norm_expanded = np.expand_dims(norm_transpose, axis = 0) # (1, 3, 640, 480)
@@ -317,43 +318,61 @@ class StrongSortPublisher(object):
                         tlh = int(output[0]) if int(output[0]) < im0.shape[1] else im0.shape[1] - 1
                         brw = int(output[3]) if int(output[3]) < im0.shape[0] else im0.shape[0] - 1
                         brh = int(output[2]) if int(output[2]) < im0.shape[1] else im0.shape[1] - 1
+                        
+                        if id > self.latest_det_dict[self.params['robot_id']]: 
+                            self.latest_det_dict[self.params['robot_id']]
                               
-                        pitch_to_obj = 67 * (((tlw + brw) / 2) - 320) / 320
+                        # Negate pitch
+                        pitch_to_obj = 67 * (320 - ((tlw + brw) / 2)) / 320
                         yaw_to_obj = 34 * (((tlh + brh) / 2) - 240) / 240
                         median_depth_val = self.depth_median(depth, tlw, tlh, brw, brh)
-                        print(f"Angle: {yaw_to_obj}\tDepth: {median_depth_val}")
+                        print(f"Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
                         
                         # TODO test this
                         overall_angles_to_obj = self.angle_to_object(odom_msg.pose.pose.orientation, pitch_to_obj, yaw_to_obj)
-                        
+
+                        print(f"Angles: {overall_angles_to_obj}")
                         # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
 
                         if id in self.results_dict: 
+                            old_info = self.results_dict[id]
+                            
                             # Localization info needs to be as recent as possible
-                            self.results_dict[id].header = Header(stamp=self.node.get_clock().now().to_msg())
-                            self.results_dict[id].keyframe_id=0, # msg.keyframe_id, change 
+                            self.results_dict[id].header.stamp = self.node.get_clock().now().to_msg()
+                            self.results_dict[id].keyframe_id = 0 # msg.keyframe_id, change 
                             self.results_dict[id].curr_confidence = conf
                             self.results_dict[id].angle_x = overall_angles_to_obj[0]
                             self.results_dict[id].angle_y = overall_angles_to_obj[1]
                             self.results_dict[id].angle_z = overall_angles_to_obj[2]
                             self.results_dict[id].distance = median_depth_val
-                            self.results_dict[id].colocalization = Pose(
-                                    position=Point(x=2, y=0, z=0), 
-                                    orientation=Quaternion(x=0, y=0, z=0, w=1)
+                            self.results_dict[id].colocalization = TransformStamped(
+                                    header=Header(
+                                        stamp=self.node.get_clock().now().to_msg(), 
+                                        frame_id=img_msg.header.frame_id # this doesn't change
+                                    ),
+                                    child_frame_id="B_odom", 
+                                    transform=Transform(
+                                        translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
+                                        rotation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+                                    )
                                 )
                             
-                            old_info = self.results_dict[id]
                             # Feature descriptor should have highest confidence
-                            if conf > old_info.confidence: 
+                            if conf > old_info.max_confidence: 
                                 cropped = im0[tlw:brw, tlh:brh]
                                 new_embedding = self.cosplace_desc.compute_embedding(cropped)
+                                # print(f"Embedding for existing obj: {new_embedding}")
                                 self.results_dict[id].max_confidence = conf
-                                self.results_dict[id].best_descriptor = new_embedding
+                                self.results_dict[id].best_descriptor = [float(x) for x in new_embedding]
                         else: 
                             cropped = im0[tlw:brw, tlh:brh]
                             new_embedding = self.cosplace_desc.compute_embedding(cropped)
+                            # print(f"Embedding for new obj: {new_embedding}")
                             self.results_dict[id] = MOTGlobalDescriptor(
-                                header=Header(stamp=self.node.get_clock().now().to_msg()), 
+                                header=Header(
+                                    stamp=self.node.get_clock().now().to_msg(), 
+                                    frame_id=img_msg.header.frame_id # this doesn't change
+                                ),
                                 robot_id=self.params['robot_id'], 
                                 robot_id_to=1, # change
                                 keyframe_id=0, # msg.keyframe_id
@@ -366,9 +385,16 @@ class StrongSortPublisher(object):
                                 angle_y=overall_angles_to_obj[1], 
                                 angle_z=overall_angles_to_obj[2], 
                                 distance=median_depth_val, 
-                                colocalization=Pose(
-                                    position=Point(x=2, y=0, z=0), 
-                                    orientation=Quaternion(x=0, y=0, z=0, w=1)
+                                colocalization = TransformStamped(
+                                    header=Header(
+                                        stamp=self.node.get_clock().now().to_msg(), 
+                                        frame_id=img_msg.header.frame_id # this doesn't change
+                                    ),
+                                    child_frame_id="B_odom", 
+                                    transform=Transform(
+                                        translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
+                                        rotation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+                                    )
                                 )
                             )
                         
@@ -419,19 +445,26 @@ class StrongSortPublisher(object):
             self.prev_frames[i] = self.curr_frames[i]
             
         # TODO remove after more thorough testing
-        self.mot_pub.publish(MOTGlobalDescriptors(descriptors=list(self.results_dict.values())))
+        self.mot_pub.publish(MOTGlobalDescriptors(
+            header=Header(
+                stamp=self.node.get_clock().now().to_msg(), 
+                frame_id=img_msg.header.frame_id
+                ), 
+            descriptors=list(self.results_dict.values())))
             
 
 
     def last_seen_callback(self): 
-        for id, last in self.latest_det_dict.items():
+        for id in range(len(self.latest_det_dict)):
             if id != self.params['robot_id']: 
-                self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=last))
+                self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=self.latest_det_dict[id]))
     
     def latest_det_callback(self, msg): 
         if msg.robot_id == self.params['robot_id']: 
             abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.results_dict.items()))
-            self.mot_pub.publish(MOTGlobalDescriptors(descriptors=list(abbrev_descriptor_dict.values())))
+            self.mot_pub.publish(MOTGlobalDescriptors(
+                header=Header(stamp=self.node.get_clock().now().to_msg()), 
+                descriptors=list(abbrev_descriptor_dict.values())))
             
             
 

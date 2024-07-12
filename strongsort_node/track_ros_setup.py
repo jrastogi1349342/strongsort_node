@@ -7,8 +7,13 @@ from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped
 import message_filters
 from pathlib import Path
+from scipy.spatial.transform import Rotation as R
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from tf2_ros import TransformBroadcaster
 
 from strongsort_node.track import StrongSortPublisher
 
@@ -31,12 +36,12 @@ class StrongSortSetup(Node):
             namespace='',
             parameters=[
                 ('robot_id', 0), # change this in launch file for each robot
-                ('max_num_robots', 2), 
+                ('max_nb_robots', 2), 
                 ('camera_type', 'gray'), # gray or color
                 ('yolo_weights', 'yolov7.pt'),
                 ('strong_sort_weights', 'osnet_x0_25_msmt17.pt'),
                 ('config_strongsort', 'src/strongsort_node/strong_sort/configs/strong_sort.yaml'), # may be changed
-                ('video_topic', "rm_vlc_leftfront/image"),
+                ('video_topic', "/rm_vlc_leftfront/image"),
                 ('name_space', "hl2"), 
                 ('img_size', [640, 640]),
                 ('conf_thres', 0.5),
@@ -69,7 +74,7 @@ class StrongSortSetup(Node):
         self.strongsort_params = {}
         
         self.strongsort_params['robot_id'] = self.get_parameter('robot_id').value
-        self.strongsort_params['max_num_robots'] = self.get_parameter('max_num_robots').value
+        self.strongsort_params['max_nb_robots'] = self.get_parameter('max_nb_robots').value
         
         self.strongsort_params['video_topic'] = self.get_parameter('video_topic').value
         self.strongsort_params['name_space'] = self.get_parameter('name_space').value
@@ -169,14 +174,44 @@ class StrongSortSetup(Node):
         )
          
         #  Colocalization will eventually go here
+        
+        other_hl2_img_sync = message_filters.Subscriber(self, 
+                                        Image, 
+                                        f"/B{self.strongsort_params['video_topic']}", 
+                                        qos_profile=rclpy.qos.QoSProfile(
+                                            reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
+                                            history=rclpy.qos.HistoryPolicy.KEEP_LAST,
+                                            durability=rclpy.qos.DurabilityPolicy.VOLATILE,
+                                            depth=5, 
+                                            )
+                                        )
                 
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync], 
             queue_size=10, 
             slop=0.5, 
             allow_headerless=True)
-        self.ts.registerCallback(self.mot_publishers.video_callback)
+        # self.ts.registerCallback(self.mot_publishers.video_callback)
+
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.A_to_B = self.create_timer(0.1, self.broadcast_pose, clock=Clock())
         
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.ts_imgs = message_filters.ApproximateTimeSynchronizer(
+            [video_sub_sync, other_hl2_img_sync], # A is first, B is second
+            queue_size=10, 
+            slop=0.5, 
+            allow_headerless=True)
+        self.ts_imgs.registerCallback(self.tf_callback_test)
+
+        
+        # self.ts_odom = message_filters.ApproximateTimeSynchronizer(
+        #     [odom_sync], 
+        #     queue_size=10, 
+        #     slop=0.5, 
+        #     allow_headerless=True)
+        # self.ts_odom.registerCallback(self.odom_to_rpy)
         
         # left_img_sync = message_filters.Subscriber(
         #     self, 
@@ -206,6 +241,56 @@ class StrongSortSetup(Node):
         # self.ts_scratch.registerCallback(self.mot_publishers.depth_scratch_sync_callback)
         # self.i = 1
         
+    def odom_to_rpy(self, msg): 
+        odom_quat = msg.pose.pose.orientation
+        odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
+
+        print(odom_rot_mtx.as_euler("xyz", degrees=True))
+        
+    def broadcast_pose(self): 
+        t = TransformStamped()
+
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'A_odom'
+        t.child_frame_id = 'B_odom'
+
+        t.transform.translation.x = 1.0
+        t.transform.translation.y = 0.0
+        t.transform.translation.z = 0.0
+
+        t.transform.rotation.x = 0.0
+        t.transform.rotation.y = 0.0
+        t.transform.rotation.z = 0.0
+        t.transform.rotation.w = 1.0
+
+        # Send the transformation
+        self.tf_broadcaster.sendTransform(t)
+
+        
+    def tf_callback_test(self, A_msg, B_msg): 
+        try: 
+            t = self.tf_buffer.lookup_transform(A_msg.header.frame_id, 
+                B_msg.header.frame_id, 
+                rclpy.time.Time()
+            )
+
+            # t = self.tf_buffer.lookup_transform_async(
+            #     A_msg.header.frame_id, 
+            #     B_msg.header.frame_id, 
+            #     rclpy.time.Time()
+            # )
+            # t = self.tf_buffer.lookup_transform(
+            #     A_msg.header.frame_id, 
+            #     A_msg.header.stamp, 
+            #     B_msg.header.frame_id, 
+            #     B_msg.header.stamp, 
+            #     rclpy.time.Time())
+            
+            print(t.transform.translation)
+            print(t.transform.rotation)
+            print("\n")
+        except Exception as e:
+            print(f"Error: {e}\n")
         
 if __name__ == '__main__':
     rclpy.init(args=None)
