@@ -21,6 +21,9 @@ class MOTDescriptorGraphConstruction(object):
         self.params = params
         self.node = node
         self.neighbor_manager = NeighborManager(self.node, self.params)
+
+        self.unified = DisjointSetAssociations()
+
         # self.tf_buffer = Buffer()
         
         # Contains MOTGlobalDescriptor messages from all neighboring agents
@@ -89,7 +92,7 @@ class MOTDescriptorGraphConstruction(object):
             # Messages grouped together by approximate time chunks --> a bunch of MOTGlobalDescriptor topics
             # Do hierarchical clustering here
             last_dets = list(self.all_neighbors_info.values())[-1]
-            self.cluster(last_dets, neighbors_in_range_list, 0.3, 1.0, 0.6)
+            self.cluster(last_dets, neighbors_in_range_list, 0.6, 1.0)
 
             # TODO get info every frame, and generalize StrongSORT + OSNet pipeline to relative poses from 
             # the perspective of the robot with the lowest agent ID (modifying Kalman Filter implementation) 
@@ -98,14 +101,16 @@ class MOTDescriptorGraphConstruction(object):
             # Apply some technique to send the resulting clusters out
 
 
-    def cluster(self, dets, curr_neighbors_in_range_list, compact_desc_min_sim, location_epsilon, compact_desc_epsilon):
+    def cluster(self, dets, curr_neighbors_in_range_list, compact_desc_min_sim, location_epsilon):
         '''Takes in all detections from a certain timestamp
         - dets: dict with robot_id as key, array of MOTGlobalDescriptor objects as value
         - curr_neighbors_in_range_list: list of robot_id's, which is monotonically increasing
+        - compact_desc_min_sim: float minimum similarity value between two compact descriptors
+        - location_epsilon: float minimum similarity between two locations
         ''' 
         
         # curr_neighbors_in_range_list is array of robot_id's
-        unified = DisjointSetAssociations([f'{x.robot_id}.{x.obj_id}' for x in dets[curr_neighbors_in_range_list[0]]])
+        self.unified.insert_arr([f'{x.robot_id}.{x.obj_id}' for x in dets[curr_neighbors_in_range_list[0]]])
         
         # for i in curr_neighbors_in_range_list[0]: # i is MOTGlobalDescriptor object
         #     key = f"{str(i.robot_id)}.{str(i.obj_id)}"
@@ -115,7 +120,7 @@ class MOTDescriptorGraphConstruction(object):
             first = curr_neighbors_in_range_list[i]
             second = curr_neighbors_in_range_list[i + 1]
             
-            unified.insert_arr([f'{x.robot_id}.{x.obj_id}' for x in dets[second]])
+            self.unified.insert_arr([f'{x.robot_id}.{x.obj_id}' for x in dets[second]])
             
             for j in dets[first]: # j, k are MOTGlobalDescriptor objects
                 heap = []
@@ -148,15 +153,10 @@ class MOTDescriptorGraphConstruction(object):
                         heapq.heappush(heap, (-1 * check_feature_desc, k.obj_id)) # heapq is a min heap, NOT a max heap
             
                 if len(heap) != 0: 
-                    negated_sim, closest_obj_id = heapq.heappop(heap)
-                    sim = -negated_sim
-                
-                    if sim >= compact_desc_epsilon: 
-                        unified.union(f"{j.robot_id}.{j.obj_id}", f"{k.robot_id}.{closest_obj_id}")
+                    _, closest_obj_id = heapq.heappop(heap)                
+                    self.unified.union(f"{j.robot_id}.{j.obj_id}", f"{k.robot_id}.{closest_obj_id}")
                         
-                    
-
-        return False
+                        
 
 
     # # This attempt utilizes triangle inequality + Law of Cosine/Law of Sine
