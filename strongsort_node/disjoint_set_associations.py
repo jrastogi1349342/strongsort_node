@@ -13,6 +13,7 @@ class DisjointSetAssociations:
         self.parent = {} # value: string
         self.obj_desc = {} # value: ObjectDescription 
         self.agents_seen = {} # value: set of agents this accounts for 
+        self.is_parent = {}
 
     # Key is string
     def __init__(self, mot_global_desc_arr): 
@@ -27,10 +28,14 @@ class DisjointSetAssociations:
             yaw=obj.yaw, 
             time=obj.header.stamp.sec + (obj.header.stamp.nanosec / 1000000000), 
             agent_perspective=obj.robot_id, 
+            descriptor_conf=obj.max_confidence,
             feature_desc=obj.best_descriptor, 
-            class_id=obj.obj_class_id
+            class_id=obj.obj_class_id, 
+            obj_id=obj.obj_id, 
+            children=[]
         )})
         self.agents_seen.update({key: set(obj.robot_id)})
+        self.is_parent.update({key: True})
         
     # mot_global_desc_arr is an array of MOTGlobalDescriptor objects
     def insert_arr(self, mot_global_desc_arr): 
@@ -60,6 +65,7 @@ class DisjointSetAssociations:
   
   
     # Do union of two sets represented by x and y. 
+    # TODO delete information from child nodes to save memory
     def union(self, x, y): 
           
         # Find current root ancestors of x and y 
@@ -74,21 +80,30 @@ class DisjointSetAssociations:
         # if ranks are different 
         if self.rank[xset] < self.rank[yset]: 
             self.parent[xset] = yset 
-            self.agents_seen[xset].append(self.agents_seen[yset])
-            self.obj_desc[xset].children.append(yset).append(self.obj_desc[yset].children)
+            self.agents_seen[yset].append(self.agents_seen[xset])
+            self.obj_desc[yset].children.append(xset).append(self.obj_desc[xset].children)
+            self.obj_desc[yset].time = self.obj_desc[yset].time if self.obj_desc[yset].time > self.obj_desc[xset].time else self.obj_desc[xset].time
+            self.is_parent[xset] = False
   
         elif self.rank[xset] > self.rank[yset]: 
             self.parent[yset] = xset 
-            self.agents_seen[yset].append(self.agents_seen[xset])
-            self.obj_desc[yset].children.append(xset).append(self.obj_desc[xset].children)
+            self.agents_seen[xset].append(self.agents_seen[yset])
+            self.obj_desc[xset].children.append(yset).append(self.obj_desc[yset].children)
+            self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
+            self.is_parent[yset] = False
   
         # If ranks are same, then move y under x (doesn't 
         # matter which one goes where) and increment rank of x's tree 
         else: 
             self.parent[yset] = xset 
             self.rank[xset] = self.rank[xset] + 1
-            self.agents_seen[yset].append(self.agents_seen[xset])
-            self.obj_desc[yset].children.append(xset).append(self.obj_desc[xset].children)
+            self.agents_seen[xset].append(self.agents_seen[yset])
+            self.obj_desc[xset].children.append(yset).append(self.obj_desc[yset].children)
+            self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
+            self.is_parent[yset] = False
                 
     def delete(self, key): 
-        del self.rank[key], self.parent[key], self.obj_desc[key], self.agents_seen[key]
+        del self.rank[key], self.parent[key], self.obj_desc[key], self.agents_seen[key], self.is_parent[key]
+        
+    def get_parents(self): 
+        return [{key: value} for key, value in self.is_parent.items() if value]
