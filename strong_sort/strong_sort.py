@@ -48,8 +48,8 @@ class StrongSORT(object):
             confidences)]
 
         # run on non-maximum supression
-        boxes = np.array([d.tlwh for d in detections])
-        scores = np.array([d.confidence for d in detections])
+        # boxes = np.array([d.tlwh for d in detections])
+        # scores = np.array([d.confidence for d in detections])
 
         # update tracker
         self.tracker.predict()

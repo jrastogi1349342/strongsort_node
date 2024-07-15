@@ -78,6 +78,7 @@ class MOTDescriptorGraphConstruction(object):
         # for info in global_desc_msg.descriptors: # info is of type MOTGlobalDescriptor
         #     obj_class_dict[stamp].append(info)
             
+
     def detect_inter_robot_associations(self): 
         '''Detect inter-robot object associations
         '''
@@ -88,34 +89,43 @@ class MOTDescriptorGraphConstruction(object):
             # Messages grouped together by approximate time chunks --> a bunch of MOTGlobalDescriptor topics
             # Do hierarchical clustering here
             last_dets = list(self.all_neighbors_info.values())[-1]
-            self.cluster(last_dets, neighbors_in_range_list, compact_desc_min_sim=0.3, compact_desc_epsilon=0.6)
+            self.cluster(last_dets, neighbors_in_range_list, 0.3, 1.0, 0.6)
+
+            # TODO get info every frame, and generalize StrongSORT + OSNet pipeline to relative poses from 
+            # the perspective of the robot with the lowest agent ID (modifying Kalman Filter implementation) 
+            # to deal with multi-agent associations
+
+            # Apply some technique to send the resulting clusters out
 
 
-    def cluster(self, dets, curr_neighbors_in_range_list, compact_desc_min_sim, compact_desc_epsilon):
+    def cluster(self, dets, curr_neighbors_in_range_list, compact_desc_min_sim, location_epsilon, compact_desc_epsilon):
         '''Takes in all detections from a certain timestamp
         - dets: dict with robot_id as key, array of MOTGlobalDescriptor objects as value
         - curr_neighbors_in_range_list: list of robot_id's, which is monotonically increasing
         ''' 
         
         # curr_neighbors_in_range_list is array of robot_id's
-        # TODO convert to list of strings and pass that in
-        unified = DisjointSetAssociations(curr_neighbors_in_range_list[0])
+        unified = DisjointSetAssociations([f'{x.robot_id}.{x.obj_id}' for x in dets[curr_neighbors_in_range_list[0]]])
         
         # for i in curr_neighbors_in_range_list[0]: # i is MOTGlobalDescriptor object
         #     key = f"{str(i.robot_id)}.{str(i.obj_id)}"
         #     unified[key] = DisjointSetAssociations(len(curr_neighbors_in_range_list[0]))
         
-        for i in range(len(curr_neighbors_in_range_list) - 1): 
-            
+        for i in range(1, len(curr_neighbors_in_range_list) - 1): 
             first = curr_neighbors_in_range_list[i]
             second = curr_neighbors_in_range_list[i + 1]
             
-            unified.insert(second)
+            unified.insert_arr([f'{x.robot_id}.{x.obj_id}' for x in dets[second]])
             
             for j in dets[first]: # j, k are MOTGlobalDescriptor objects
                 heap = []
                 
                 for k in dets[second]: 
+                    # Assuming each class is very different from each other class, don't cluster if detected as a 
+                    # different class
+                    if j.obj_class_id != k.obj_class_id: 
+                        continue
+
                     # # Triangle approach
                     # check_odom = self.check_same_location(
                     #     j.distance, 
@@ -125,7 +135,8 @@ class MOTDescriptorGraphConstruction(object):
                     #     k.colocalization)
                     
                     # r0_dist, r0_pitch, r0_yaw, r1_dist, r1_pitch, r1_yaw, colocalization, epsilon
-                    check_odom = self.check_same_location(j.distance, j.pitch, j.yaw, k.distance, k.pitch, k.yaw, j.colocalization, 1.0)
+                    check_odom = self.check_same_location(j.distance, j.pitch, j.yaw, k.distance, 
+                                                          k.pitch, k.yaw, j.colocalization, location_epsilon)
                     
                     if not check_odom: 
                         continue
@@ -137,12 +148,11 @@ class MOTDescriptorGraphConstruction(object):
                         heapq.heappush(heap, (-1 * check_feature_desc, k.obj_id)) # heapq is a min heap, NOT a max heap
             
                 if len(heap) != 0: 
-                    negated_sim, obj_id = heapq.heappop(heap)
+                    negated_sim, closest_obj_id = heapq.heappop(heap)
                     sim = -negated_sim
                 
                     if sim >= compact_desc_epsilon: 
-                        id = str()
-                        unified[(j, j.obj_id)] = (j + 1, obj_id)
+                        unified.union(f"{j.robot_id}.{j.obj_id}", f"{k.robot_id}.{closest_obj_id}")
                         
                     
 

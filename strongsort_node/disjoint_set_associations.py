@@ -1,15 +1,19 @@
 class DisjointSetAssociations: 
+    '''Uses Disjoint Set data structure to efficiently cluster the detections\n
+    Applies path compression and union by rank for amortized O(a(n)), where a(n) is 
+    inverse Ackermann function (minimal)
+    '''
     # arr is an array of strings
     def __init__(self, arr): 
         # Constructor to create and initialize sets of n items 
-        self.rank = [1] * len(arr) 
-        self.parent = [i for i in arr] 
+        self.rank = {f'{x}': 1 for _, x in enumerate(arr)}
+        self.parent = {f'{x}': x for _, x in enumerate(arr)}
+        self.time = 0
         
     # increased_arr is an array of strings
-    def insert(self, increased_arr): 
-        old_size = len(self.rank)
-        self.rank.extend([1] * len(increased_arr))
-        self.parent.extend([i for i in increased_arr])
+    def insert_arr(self, increased_arr): 
+        self.rank.update({f'{x}': 1 for _, x in enumerate(increased_arr)})
+        self.parent.update({f'{x}': x for _, x in enumerate(increased_arr)})
   
     # Finds set of given item x 
     def find(self, x): 
@@ -31,7 +35,7 @@ class DisjointSetAssociations:
     # Do union of two sets represented by x and y. 
     def union(self, x, y): 
           
-        # Find current sets of x and y 
+        # Find current root ancestors of x and y 
         xset = self.find(x) 
         yset = self.find(y) 
   
