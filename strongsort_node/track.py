@@ -6,7 +6,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
-from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection
+from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection, UnifiedObjectIDs
 import math
 from scipy.spatial.transform import Rotation as R
 
@@ -94,6 +94,14 @@ class StrongSortPublisher(object):
             f"/{self.params['name_space']}/mot", 
             qos_profile=qos_pf)
         
+        self.unified_id_mapping = {}
+        
+        self.unified_ids_sub = self.node.create_subscription(
+            UnifiedObjectIDs, 
+            '/mot/unified', 
+            self.unified_info_callback, 
+            10
+        )
 
         self.orig_init()
         
@@ -347,6 +355,7 @@ class StrongSortPublisher(object):
                             # self.results_dict[id].angle_y = overall_angles_to_obj[1]
                             # self.results_dict[id].angle_z = overall_angles_to_obj[2]
                             self.results_dict[id].distance = median_depth_val
+                            self.results_dict[id].pose = odom_msg.pose.pose
                             self.results_dict[id].colocalization = TransformStamped(
                                     header=Header(
                                         stamp=self.node.get_clock().now().to_msg(), 
@@ -389,6 +398,7 @@ class StrongSortPublisher(object):
                                 # angle_y=overall_angles_to_obj[1], 
                                 # angle_z=overall_angles_to_obj[2], 
                                 distance=median_depth_val, 
+                                pose=odom_msg.pose.pose,
                                 colocalization = TransformStamped(
                                     header=Header(
                                         stamp=self.node.get_clock().now().to_msg(), 
@@ -411,8 +421,9 @@ class StrongSortPublisher(object):
                         if self.params['save_vid'] or self.params['save_crop'] or self.params['show_video']:  # Add bbox to image
                             c = int(cls)  # integer class
                             id = int(id)  # integer id
-                            label = None if self.params['hide_labels'] else (f'{id} {self.names[c]}' if self.params['hide_conf'] else \
-                                (f'{id} {conf:.2f}' if self.params['hide_class'] else f'{id} {self.names[c]} {conf:.2f}'))
+                            unified_id = self.unified_id_mapping[id]
+                            label = None if self.params['hide_labels'] else (f'{unified_id} {self.names[c]}' if self.params['hide_conf'] else \
+                                (f'{unified_id} {conf:.2f}' if self.params['hide_class'] else f'{unified_id} {self.names[c]} {conf:.2f}'))
                             plot_one_box(bboxes, im0, label=label, color=self.colors[int(cls)], line_thickness=2)
                             if self.params['save_crop']:
                                 txt_file_name = txt_file_name if (isinstance(self.path, list) and len(self.path) > 1) else ''
@@ -457,11 +468,11 @@ class StrongSortPublisher(object):
             descriptors=list(self.results_dict.values())))
             
 
-
     def last_seen_callback(self): 
         for id in range(len(self.latest_det_dict)):
             if id != self.params['robot_id']: 
                 self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=self.latest_det_dict[id]))
+    
     
     def latest_det_callback(self, msg): 
         if msg.robot_id == self.params['robot_id']: 
@@ -469,8 +480,14 @@ class StrongSortPublisher(object):
             self.mot_pub.publish(MOTGlobalDescriptors(
                 header=Header(stamp=self.node.get_clock().now().to_msg()), 
                 descriptors=list(abbrev_descriptor_dict.values())))
+        
             
-            
+    # UnifiedObjectIDs message
+    def unified_info_callback(self, msg): 
+        if msg.robot_id == self.params['robot_id']: 
+            for i in range(len(msg.obj_ids)): 
+                self.unified_id_mapping.update({msg.obj_ids[i]: msg.unified_obj_ids[i]})
+                
 
     # Callback for commented out ApproximateTimeSynchronizer
     def depth_scratch_sync_callback(self, left_img_msg, right_img_msg): 

@@ -1,5 +1,5 @@
 from strongsort_node.neighbor_monitor import NeighborMonitor
-from cslam_common_interfaces.msg import RobotIdsAndOrigin
+# from cslam_common_interfaces.msg import RobotIdsAndOrigin
 from std_msgs.msg import String
 
 import rclpy
@@ -22,11 +22,11 @@ class NeighborManager():
                     self.params['neighbor_management.init_delay_sec'],
                     self.params['neighbor_management.max_heartbeat_delay_sec'])
 
-        self.subscriber = self.node.create_subscription(
-            String, 'cslam/get_current_neighbors',
-            self.get_current_neighbors_callback, 100)
-        self.neighbors_publisher = self.node.create_publisher(
-            RobotIdsAndOrigin, 'cslam/current_neighbors', 100)
+        # self.subscriber = self.node.create_subscription(
+        #     String, 'cslam/get_current_neighbors',
+        #     self.get_current_neighbors_callback, 100)
+        # self.neighbors_publisher = self.node.create_publisher(
+        #     RobotIdsAndOrigin, 'cslam/current_neighbors', 100)
 
     def check_neighbors_in_range(self):
         """Check which neighbors are in range
@@ -168,17 +168,17 @@ class NeighborManager():
                 last_id))
         return list_index_range
 
-    def get_current_neighbors_callback(self, msg):
-        """Publish the current neighbors in range
+    # def get_current_neighbors_callback(self, msg):
+    #     """Publish the current neighbors in range
 
-        Args:
-            msg (String): Empty
-        """
-        is_robot_in_range, robots_in_range_list = self.check_neighbors_in_range()
-        robots_in_range_list.remove(self.robot_id)
-        msg = RobotIdsAndOrigin()
-        msg.robots.ids = robots_in_range_list
-        for i in robots_in_range_list:
-            msg.origins.ids.append(self.neighbors_monitors[i].origin_robot_id)
+    #     Args:
+    #         msg (String): Empty
+    #     """
+    #     is_robot_in_range, robots_in_range_list = self.check_neighbors_in_range()
+    #     robots_in_range_list.remove(self.robot_id)
+    #     msg = RobotIdsAndOrigin()
+    #     msg.robots.ids = robots_in_range_list
+    #     for i in robots_in_range_list:
+    #         msg.origins.ids.append(self.neighbors_monitors[i].origin_robot_id)
 
-        self.neighbors_publisher.publish(msg)
+    #     self.neighbors_publisher.publish(msg)

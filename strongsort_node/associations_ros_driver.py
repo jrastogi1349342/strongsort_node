@@ -37,12 +37,19 @@ class AssociationsROSDriver(Node):
         self.params['sort.location_epsilon'] = self.get_parameter(
             'sort.location_epsilon').value
 
-        self.maa_driver = ObjectAssociation(
+        self.obj_association_driver = ObjectAssociation(
             self.params, self)
+        
         self.inter_robot_detection_timer = self.create_timer(
             self.params['sort.re_cluster_secs'],
-            self.maa_driver.detect_inter_robot_associations, clock=Clock())
+            self.obj_association_driver.detect_inter_robot_associations, 
+            clock=Clock())
 
+        # self.apply_kf_timer = self.create_timer(
+        #     self.params['sort.kalman_filter_secs'], 
+        #     self.obj_association_driver.apply_kf, 
+        #     clock=Clock()
+        # )
 
 if __name__ == '__main__':
     rclpy.init(args=None)
