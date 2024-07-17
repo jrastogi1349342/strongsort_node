@@ -66,33 +66,38 @@ class StrongSortPublisher(object):
         
         # self.cosplace_desc = CosPlace(self.params, self.node)
         self.cosplace_desc = CosPlace()
+        
+        # Dictionary mapping object ID to MOTGlobalDescriptor object
         self.results_dict = {}
         
-        self.latest_det_dict = [-1] * self.params['max_nb_robots']
-        
-        # Sends highest last seen object detection ID of all other agents every 0.1 seconds
+        self.last_sent_detections_time = -1.0
+        # Sends MOTGlobalDescriptors object every 0.1 seconds to all new detections found in the
+        # last 0.1 seconds 
+        # NOTE: will not send to agents out of range 
         self.last_seen_det_clock = self.node.create_timer(0.1, self.last_seen_callback, clock=Clock())
-        self.global_desc_req_pub = self.node.create_publisher(
-            LastSeenDetection, 
-            f"/{self.params['name_space']}{self.params['video_topic']}/last", 
-            10)
+        
+        # self.latest_det_dict = [-1] * self.params['max_nb_robots']
+        
+        # self.global_desc_req_pub = self.node.create_publisher(
+        #     LastSeenDetection, 
+        #     f"/{self.params['name_space']}{self.params['video_topic']}/last", 
+        #     10)
         
         # Subscribes to LastSeenDetection messages for highest non-unified object ID of current agent, 
         # and sends that robot a MOTGlobalDescriptors msg containing info on all non-unified object IDs 
         # (i.e. msg.obj_id for a given robot_id > latest_det_dict[msg.robot_id])
-        self.latest_class_sub = self.node.create_subscription(
-            LastSeenDetection, 
-            f"/{self.params['name_space']}{self.params['video_topic']}/last", 
-            self.latest_det_callback, 
-            10)
+        # self.latest_class_sub = self.node.create_subscription(
+        #     LastSeenDetection, 
+        #     f"/{self.params['name_space']}{self.params['video_topic']}/last", 
+        #     self.latest_det_callback, 
+        #     10)
         
         # Sends all descriptors with non-unified IDs to the other robot in callback of self.latest_class_sub
         # subscriber (i.e. new info found)
-        # Temporarily publishing all detections from callback for testing purposes
         self.mot_pub = self.node.create_publisher(
             MOTGlobalDescriptors, 
-            f"/{self.params['name_space']}/mot", 
-            qos_profile=qos_pf)
+            f"/mot/descriptors", 
+            100)
         
         self.unified_id_mapping = {}
         
@@ -212,7 +217,7 @@ class StrongSortPublisher(object):
         
         odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
         
-        print(f"Obj rotation matrix: {obj_rot_mtx.as_euler('xyz', degrees=True)}\tOdom rotation matrix: {odom_rot_mtx.as_euler('xyz', degrees=True)}")
+        # print(f"Obj rotation matrix: {obj_rot_mtx.as_euler('xyz', degrees=True)}\tOdom rotation matrix: {odom_rot_mtx.as_euler('xyz', degrees=True)}")
         
         combined_rot_mtx = obj_rot_mtx * odom_rot_mtx
         return combined_rot_mtx.as_euler('xyz', degrees=True)
@@ -327,20 +332,44 @@ class StrongSortPublisher(object):
                         brw = int(output[3]) if int(output[3]) < im0.shape[0] else im0.shape[0] - 1
                         brh = int(output[2]) if int(output[2]) < im0.shape[1] else im0.shape[1] - 1
                         
-                        if id > self.latest_det_dict[self.params['robot_id']]: 
-                            self.latest_det_dict[self.params['robot_id']]
+                        # if id > self.latest_det_dict[self.params['robot_id']]: 
+                        #     self.latest_det_dict[self.params['robot_id']]
                               
                         # Negate pitch
                         pitch_to_obj = 67 * (320 - ((tlw + brw) / 2)) / 320
                         yaw_to_obj = 34 * (((tlh + brh) / 2) - 240) / 240
                         median_depth_val = self.depth_median(depth, tlw, tlh, brw, brh)
-                        print(f"Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
+                        # print(f"Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
                         
                         # TODO test this
-                        overall_angles_to_obj = self.angle_to_object(odom_msg.pose.pose.orientation, pitch_to_obj, yaw_to_obj)
+                        # overall_angles_to_obj = self.angle_to_object(odom_msg.pose.pose.orientation, pitch_to_obj, yaw_to_obj)
 
-                        print(f"Angles: {overall_angles_to_obj}")
+                        # print(f"Angles: {overall_angles_to_obj}")
                         # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
+
+                        # ID 0 is on the left of ID 1
+                        # TODO test this
+                        colocalization = TransformStamped(
+                            header=Header(
+                                stamp=self.node.get_clock().now().to_msg(), 
+                                frame_id=img_msg.header.frame_id # this doesn't change
+                            ))
+                        quat = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+                        quat_scipy = R.from_quat([0.0, 0.0, 0.0, 1.0])
+                        quat_scipy_inv = quat_scipy.inv().as_quat
+                        quat_inv = Quaternion(x=quat_scipy_inv[0], y=quat_scipy_inv[1], z=quat_scipy_inv[2], w=quat_scipy_inv[3])
+                        if self.params['robot_id'] == 0: 
+                            colocalization.child_frame_id = "B_odom"
+                            colocalization.transform = Transform(
+                                translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
+                                rotation=quat
+                            )
+                        else: 
+                            colocalization.child_frame_id = "A_odom"
+                            colocalization.transform = Transform(
+                                translation=Vector3(x=-1.0, y=0.0, z=0.0), # meters?
+                                rotation=quat_inv
+                            )
 
                         if id in self.results_dict: 
                             old_info = self.results_dict[id]
@@ -356,17 +385,7 @@ class StrongSortPublisher(object):
                             # self.results_dict[id].angle_z = overall_angles_to_obj[2]
                             self.results_dict[id].distance = median_depth_val
                             self.results_dict[id].pose = odom_msg.pose.pose
-                            self.results_dict[id].colocalization = TransformStamped(
-                                    header=Header(
-                                        stamp=self.node.get_clock().now().to_msg(), 
-                                        frame_id=img_msg.header.frame_id # this doesn't change
-                                    ),
-                                    child_frame_id="B_odom", 
-                                    transform=Transform(
-                                        translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
-                                        rotation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-                                    )
-                                )
+                            self.results_dict[id].colocalization = colocalization
                             
                             # Feature descriptor should have highest confidence
                             if conf > old_info.max_confidence: 
@@ -399,17 +418,7 @@ class StrongSortPublisher(object):
                                 # angle_z=overall_angles_to_obj[2], 
                                 distance=median_depth_val, 
                                 pose=odom_msg.pose.pose,
-                                colocalization = TransformStamped(
-                                    header=Header(
-                                        stamp=self.node.get_clock().now().to_msg(), 
-                                        frame_id=img_msg.header.frame_id # this doesn't change
-                                    ),
-                                    child_frame_id="B_odom", 
-                                    transform=Transform(
-                                        translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
-                                        rotation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-                                    )
-                                )
+                                colocalization = colocalization
                             )
                         
                         if self.params['save_text']:
@@ -459,27 +468,37 @@ class StrongSortPublisher(object):
 
             self.prev_frames[i] = self.curr_frames[i]
             
-        # TODO remove after more thorough testing
-        self.mot_pub.publish(MOTGlobalDescriptors(
-            header=Header(
-                stamp=self.node.get_clock().now().to_msg(), 
-                frame_id=img_msg.header.frame_id
-                ), 
-            descriptors=list(self.results_dict.values())))
+        # # TODO remove after more thorough testing
+        # self.mot_pub.publish(MOTGlobalDescriptors(
+        #     header=Header(
+        #         stamp=self.node.get_clock().now().to_msg(), 
+        #         frame_id=img_msg.header.frame_id
+        #         ), 
+        #     descriptors=list(self.results_dict.values())))
             
 
     def last_seen_callback(self): 
-        for id in range(len(self.latest_det_dict)):
-            if id != self.params['robot_id']: 
-                self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=self.latest_det_dict[id]))
+        stamp = self.node.get_clock().now().to_msg()
+        self.mot_pub.publish(MOTGlobalDescriptors(
+            header=Header(stamp=stamp), 
+            descriptors=list(self.results_dict.values())))
+        
+        # self.last_sent_detections_time = stamp.sec + (stamp.nanosec / 1000000000)
+        self.results_dict.clear()
+            
+        
+        
+        # for id in range(len(self.latest_det_dict)):
+        #     # if id != self.params['robot_id']: 
+        #     self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=self.latest_det_dict[id]))
     
     
-    def latest_det_callback(self, msg): 
-        if msg.robot_id == self.params['robot_id']: 
-            abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.results_dict.items()))
-            self.mot_pub.publish(MOTGlobalDescriptors(
-                header=Header(stamp=self.node.get_clock().now().to_msg()), 
-                descriptors=list(abbrev_descriptor_dict.values())))
+    # def latest_det_callback(self, msg): 
+    #     if msg.robot_id == self.params['robot_id']: 
+    #         abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.results_dict.items()))
+    #         self.mot_pub.publish(MOTGlobalDescriptors(
+    #             header=Header(stamp=self.node.get_clock().now().to_msg()), 
+    #             descriptors=list(abbrev_descriptor_dict.values())))
         
             
     # UnifiedObjectIDs message

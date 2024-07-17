@@ -6,8 +6,7 @@ class DisjointSetAssociations:
     inverse Ackermann function (minimal)
     '''
     # Key is string
-    def __init__(self, num_robots): 
-        self.num_robots = num_robots
+    def __init__(self): 
         # This assumes python >= 3.6, where dicts are ordered by order of insertion
         self.rank = {} # value: int
         self.parent = {} # value: string
@@ -15,8 +14,8 @@ class DisjointSetAssociations:
         self.is_parent = {}
 
     # Key is string
-    def __init__(self, mot_global_desc_arr): 
-        self.insert_arr(mot_global_desc_arr)
+    # def __init__(self, mot_global_desc_arr): 
+    #     self.insert_arr(mot_global_desc_arr)
 
     def insert(self, obj, key, curr_time): 
         self.rank.update({key: 1})
@@ -114,13 +113,21 @@ class DisjointSetAssociations:
     def get_parents_keys(self): 
         return [key for key, value in self.is_parent.items() if value]
     
-    def get_all_clustered_keys(self, parent_key): 
+    def get_keys_in_cluster(self, parent_key): 
         lst = [parent_key]
         
         for robot_id, obj_id in self.obj_desc[parent_key].children: 
             lst.append(f'{robot_id}.{obj_id}')
             
         return lst
+    
+    def get_all_clustered_keys(self): 
+        final_lst = []
+        parents = self.get_parents_keys()
+        for key in parents: 
+            final_lst.append(self.get_keys_in_cluster(key))
+            
+        return final_lst
     
     # No negative values in clusters
     def get_obj_id_in_cluster(self, parent_key, robot_id): 

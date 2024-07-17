@@ -117,10 +117,8 @@ class StrongSortSetup(Node):
         
         self.mot_publishers = StrongSortPublisher(self.strongsort_params, self)
 
-
-        # print(f"/{name_space}{video_source}\t/{name_space}/stereo/depth\t/{name_space}/stereo/left/camera_info\t/{name_space}/odom")
+        # print(f"/{self.strongsort_params['name_space']}{self.strongsort_params['video_topic']}\t/{self.strongsort_params['name_space']}/stereo/depth\t//{self.strongsort_params['name_space']}/stereo/left/camera_info\t/{self.strongsort_params['name_space']}/odom")
         
-        # TODO maybe add namespace here, but works 
         # Gets camera info, runs Yolo and StrongSORT, populates self.best_cosplace_results_dict
         video_sub_sync = message_filters.Subscriber(self, 
                                                Image, 
@@ -191,10 +189,10 @@ class StrongSortSetup(Node):
             queue_size=10, 
             slop=0.5, 
             allow_headerless=True)
-        # self.ts.registerCallback(self.mot_publishers.video_callback)
+        self.ts.registerCallback(self.mot_publishers.video_callback)
 
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.A_to_B = self.create_timer(0.1, self.broadcast_pose, clock=Clock())
+        # self.A_to_B = self.create_timer(0.1, self.broadcast_pose, clock=Clock())
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -203,7 +201,7 @@ class StrongSortSetup(Node):
             queue_size=10, 
             slop=0.5, 
             allow_headerless=True)
-        self.ts_imgs.registerCallback(self.tf_callback_test)
+        # self.ts_imgs.registerCallback(self.tf_callback_test)
 
         
         # self.ts_odom = message_filters.ApproximateTimeSynchronizer(

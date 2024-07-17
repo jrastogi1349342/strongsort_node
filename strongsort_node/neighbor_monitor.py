@@ -25,7 +25,7 @@ class NeighborMonitor():
         self.last_match_sent = -1
 
         self.heartbeat_subscriber = self.node.create_subscription(
-            UInt32, '/r' + str(rid) + '/' + 'cslam/heartbeat',
+            UInt32, '/r' + str(rid) + '/' + 'mot/heartbeat',
             self.heartbeat_callback, 10)
 
     def heartbeat_callback(self, msg):
@@ -34,6 +34,7 @@ class NeighborMonitor():
         Args:
             msg (UInt32):
         """
+        # print(f"{self.robot_id} hearing heartbeat")
         self.origin_robot_id = msg.data
         self.latest_time_stamp = time()
         if not self.first_heartbeat_received:

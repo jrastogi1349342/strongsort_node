@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.clock import Clock
 import math
 import heapq
+import numpy as np
 
 from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
 from scipy.spatial.transform import Rotation as R
@@ -22,7 +23,7 @@ class ObjectAssociation(object):
         self.node = node
         self.neighbor_manager = NeighborManager(self.node, self.params)
 
-        self.unified = DisjointSetAssociations(self.params['max_nb_robots'])
+        self.unified = DisjointSetAssociations()
         # Key: {robot_id}.{timestamp}
         # Value: geometry_msgs/Pose pose
         # TODO delete old messages to save memory
@@ -40,43 +41,105 @@ class ObjectAssociation(object):
         # Get info from all robots --> TODO fix this
         self.info_sub = self.node.create_subscription(
             MOTGlobalDescriptors, 
-            f"/{self.params['name_space']}/mot", 
+            f"/mot/descriptors", 
             self.info_callback, 
             100)
         
         # Goes to all robots but only the robot with the right robot ID uses it for anything
-        self.unified_publishers_arr = []
+        self.unified_publishers_arr = {}
         for id in range(self.params['max_nb_robots']): 
             self.unified_publishers_arr[id] = self.node.create_publisher(UnifiedObjectIDs, '/mot/unified', 10)
 
-    # Version 2
-    # Update last seen time of all info in unified set, and generalize old location with EKF
-    # Insert all new messages into unified disjoint set, if new; if old, update last seen time to curr
-    # For each new message: add to cluster
-    # If object has not been seen in [some amount of time], delete
-    def info_callback(self, global_desc_msg): 
-        curr_time = global_desc_msg.header.stamp.sec + (global_desc_msg.header.stamp.nanosec / 1000000000) 
-        if self.last_time_entered != -1: 
-            delta_t = curr_time - self.last_time_entered
-            for parent in self.unified.obj_desc.get_parents_keys(): 
-                obj_desc = self.unified.obj_desc[parent]
-                if obj_desc.get_time() + delta_t > self.params['sort.max_occlusion_time']: 
-                    self.delete_association_tree(parent)
-                else: 
-                    obj_desc.set_time(curr_time)
-                    self.apply_kf(obj_desc, delta_t)
-        self.last_time_entered = curr_time
+    # Version 3
+    def info_callback(self, descriptor_msg): 
+        '''Callback for getting MOTGlobalDescriptors object from some robot
+        - descriptor_msg: MOTGlobalDescriptors object; is from 1 unique robot ID 
+        '''
+        not_seen_clusters = set(self.unified.get_parents_keys())
+        new_time = descriptor_msg.header.stamp.sec + (descriptor_msg.header.stamp.nanosec / 1000000000) 
+        if len(descriptor_msg.descriptors) > 0: 
+            # Update latest time broker got a message from this specific agent
+            self.last_time_agent_entered.update({descriptor_msg.descriptors[0].robot_id: new_time})
+            
+            # num_parents_with_children = 0
+            for obj in descriptor_msg.descriptors: 
+                key = f'{obj.robot_id}.{obj.obj_id}'
+                parent = self.unified.find(key)
+                if parent == '': # Not in disjoint set
+                    self.unified.insert(obj, key, new_time)
+                else: # In disjoint set somewhere 
+                    self.update_association_info(obj, parent, new_time)
+                    
+                    not_seen_clusters.remove(parent)
+                    
+                    # if len(self.unified.obj_desc[parent].children) > 0: 
+                    #     num_parents_with_children += 1
+                        
+                self.update_colocalization(obj, new_time)
+                
+            # print(f"Num of parents with children: {num_parents_with_children}")
+            
+        for not_seen_keys in not_seen_clusters: 
+            if new_time - self.unified.obj_desc[not_seen_keys].time > self.params['sort.max_occlusion_time']: 
+                self.delete_association_tree(not_seen_keys)
+                
+            # else: 
+            # TODO figure this out
+            #     self.apply_kf(self.unified.obj_desc[not_seen_keys], dt)
+            
+        print(f"Unified: {self.unified.get_all_clustered_keys()}")
 
-        self.last_time_agent_entered[global_desc_msg.descriptors[0].robot_id] = curr_time
         
-        for obj in global_desc_msg.descriptors: 
-            key = f'{obj.robot_id}.{obj.obj_id}'
-            parent = self.unified.find(key)
-            if parent == '': # Not in disjoint set
-                self.unified.insert(obj, key, curr_time)
-                self.update_colocalization(obj, curr_time)
-            else: # In disjoint set somewhere 
-                self.update_association_info(obj, parent, curr_time)
+    # # Version 2
+    # # Update last seen time of all info in unified set, and generalize old location with EKF
+    # # Insert all new messages into unified disjoint set, if new; if old, update last seen time to curr
+    # # For each new message: add to cluster
+    # # If object has not been seen in [some amount of time], delete
+    # def info_callback(self, global_desc_msg): 
+    #     # print(f"Before insertion into unified: {self.unified.get_all_clustered_keys()}")
+
+    #     curr_time = global_desc_msg.header.stamp.sec + (global_desc_msg.header.stamp.nanosec / 1000000000) 
+    #     if self.last_time_entered != -1: # if this is not the first time the callback is called
+    #         for parent in self.unified.get_parents_keys(): 
+    #             robot_id = int(parent.split(".", 1)[0])
+    #             # last time this specific parent or one of its children was entered into this set
+    #             last_time_agent_entered_val = self.last_time_agent_entered[robot_id]
+    #             delta_t = curr_time - last_time_agent_entered_val
+    #             obj_desc = self.unified.obj_desc[parent]
+                
+    #             if delta_t > self.params['sort.max_occlusion_time']: 
+    #                 print(f"Deleting {parent}")
+    #                 self.delete_association_tree(parent)
+    #             # else: 
+    #             #     obj_desc.set_time(curr_time)
+                    
+    #                 # TODO deal with kalman filter later (and push implementation from home laptop)
+    #                 # self.apply_kf(obj_desc, delta_t)
+                    
+    #             self.last_time_agent_entered[robot_id] = curr_time
+                
+    #     self.last_time_entered = curr_time
+
+    #     if len(global_desc_msg.descriptors) > 0: 
+    #         # print(f"Size of descriptors: {len(global_desc_msg.descriptors)}")
+    #         # print(f"Robot ID: {global_desc_msg.descriptors[0].robot_id}")
+    #         self.last_time_agent_entered.update({global_desc_msg.descriptors[0].robot_id: curr_time})
+            
+    #         num_parents_with_children = 0
+    #         for obj in global_desc_msg.descriptors: 
+    #             key = f'{obj.robot_id}.{obj.obj_id}'
+    #             parent = self.unified.find(key)
+    #             if parent == '': # Not in disjoint set
+    #                 self.unified.insert(obj, key, curr_time)
+    #             else: # In disjoint set somewhere 
+    #                 self.update_association_info(obj, parent, curr_time)
+    #                 if len(self.unified.obj_desc[parent].children) > 0: 
+    #                     num_parents_with_children += 1
+                        
+    #             self.update_colocalization(obj, curr_time)
+                
+    #         print(f"Num of parents with children: {num_parents_with_children}")
+    #     print(f"Unified: {self.unified.get_all_clustered_keys()}")
 
     def delete_association_tree(self, parent): 
         '''Delete association tree, because the set of detections has not been seen recently
@@ -110,7 +173,7 @@ class ObjectAssociation(object):
             if kf.get_update_num() == -1: 
                 # Future work: replace velocity with twist from odometry message, and use rotation info
                 if obj.robot_id == self.params['robot_id']: 
-                    pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_entered[obj.robot_id]}']
+                    pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                     pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
 
                     x_pos = pose_then.position.x - pose_now.position.x
@@ -119,8 +182,8 @@ class ObjectAssociation(object):
 
                     kf.set_ref_frame(self.params['robot_id'], np.array([[x_pos], [y_pos], [z_pos], [0], [0], [0]]))
                 else: 
-                    # broker_pose_now = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_entered[obj.robot_id]}']
-                    other_pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_entered[obj.robot_id]}']
+                    # broker_pose_now = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[obj.robot_id]}']
+                    other_pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                     other_pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
 
                     transform_stamped = self.current_transforms[self.params['robot_id']][obj.robot_id] 
@@ -134,7 +197,7 @@ class ObjectAssociation(object):
                 kf.set_update_num(kf.get_update_num() + 1)
             # TODO figure out else block, and use this to change dist, pitch, yaw
 
-        kf.predict_and_update(self.params['robot_id'])
+            kf.predict_and_update(self.params['robot_id'])
                 
     def update_association_info(self, obj, parent_key, curr_time): 
         '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n
@@ -144,9 +207,7 @@ class ObjectAssociation(object):
         self.unified.obj_desc[parent_key].dist = obj.distance
         self.unified.obj_desc[parent_key].pitch = obj.pitch
         self.unified.obj_desc[parent_key].yaw = obj.yaw
-        
-        self.update_colocalization(obj, curr_time)
-        
+                
         if obj.max_confidence > self.unified.obj_desc[parent_key].descriptor_conf: 
             self.unified.obj_desc[parent_key].descriptor_conf = obj.max_confidence
             self.unified.obj_desc[parent_key].feature_desc = obj.best_descriptor
@@ -165,11 +226,12 @@ class ObjectAssociation(object):
         
         # neighbors_in_range_list will always have one element (same robot_id)
         if len(neighbors_in_range_list) > 1 and self.neighbor_manager.local_robot_is_broker():
+            print(f"\nClustering from robot {self.params['robot_id']}: neighbors_is_in_range: {neighbors_is_in_range}\tneighbors_in_range_list: {neighbors_in_range_list}")
             self.cluster(set(neighbors_in_range_list))
             
             self.unify_clustered_objects(neighbors_in_range_list)
-            
-            self.publish_unified()
+
+            print("\n")
 
             # TODO get info every frame, and generalize StrongSORT + OSNet pipeline to relative poses from 
             # the perspective of the robot with the lowest agent ID (modifying Kalman Filter implementation) 
@@ -184,16 +246,28 @@ class ObjectAssociation(object):
         
         # index is robot_id, value is list of keys with that robot_id as the parent that have not yet been 
         # unified between all agents, ordered by insertion order
-        abbreviated = [] 
+        abbreviated = {}
+        abbv_time = {}
+        for i in range(self.params['max_nb_robots']): 
+            abbreviated[i] = []
+            abbv_time[i] = []
+        
         for key in parent_keys_lst: 
-            robot_id = key.split(".", 1)[0]
+            robot_id = int(key.split(".", 1)[0])
+            # print(f"robot_id: {robot_id}\tcurr_neighbors_in_range_set: {curr_neighbors_in_range_set}")
+            # print(f"robot_id in curr_neighbors_in_range_set: {robot_id in curr_neighbors_in_range_set}")
+            # print(f"len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1: {len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1}")
             if (robot_id in curr_neighbors_in_range_set and 
                 len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1): 
-                abbreviated[i].append(key)
+                abbreviated[robot_id].append(key)
+                abbv_time[robot_id].append((key, self.unified.obj_desc[key].time))
+                
+        print(f"Abbreviated items to cluster: {abbreviated}")
+        print(f"Abbreviated + time: {abbv_time}")
                     
         for i in range(len(abbreviated) - 1): 
-            first = abbreviated[i]
-            second = abbreviated[i + 1]
+            first = abbreviated[i] # robot 0
+            second = abbreviated[i + 1] # robot 1
                         
             for j in reversed(first): # j, k are string keys
                 j_info = self.unified.obj_desc[j]
@@ -201,6 +275,7 @@ class ObjectAssociation(object):
                 if j_info.time > latest_msg_time: 
                     latest_msg_time = j_info.time
 
+                # One place where the ordered dict by insertion part comes from
                 if j_info.time < self.last_time_clustered: 
                     break
                 
@@ -210,10 +285,12 @@ class ObjectAssociation(object):
 
                     if k_info.time > latest_msg_time: 
                         latest_msg_time = k_info.time
+                        
+                    # print(f"j: {j_info.robot_id}.{j_info.time}\tk: {k_info.robot_id}.{k_info.time}")
                     
                     # Assuming each class is very different from each other class, don't cluster if detected as a 
                     # different class
-                    if j_info.class_id != k_info.class_id: 
+                    if j_info.robot_id == k_info.robot_id or j_info.class_id != k_info.class_id: 
                         continue
                     
                     # r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
@@ -271,12 +348,15 @@ class ObjectAssociation(object):
         Eg: use dictionary for r0_(t-3) to r0_t, current colocalization to convert from r0_t to r1_t, 
         and dictionary from r1_t to r1_(t-5)
         '''
+        # print(self.pose_dict.keys())
         a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
         b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
         
-        a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_entered[r0_id]}']
-        b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_entered[r1_id]}']
-                
+        a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_agent_entered[r0_id]}']
+        b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_agent_entered[r1_id]}']
+        
+        print(self.current_transforms)
+        # Debugged until here - TODO continue
         transform_stamped = self.current_transforms[r0_id][r1_id] # from a_pose_now to b_pose_now
         
         # TODO figure out quaternion here
@@ -317,7 +397,7 @@ class ObjectAssociation(object):
         
         parents = self.unified.get_parents_keys()
         for key in parents: 
-            all_keys_in_cluster = self.unified.get_all_clustered_keys(key)
+            all_keys_in_cluster = self.unified.get_keys_in_cluster(key)
             id_from_broker = self.unified.get_obj_id_in_cluster(key, self.params['robot_id'])
             
             if id_from_broker == -1: 
