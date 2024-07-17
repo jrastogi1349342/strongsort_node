@@ -93,25 +93,48 @@ class ObjectAssociation(object):
     # Collectively decrease confidence in object location at once for old detections
     def apply_kf(self, obj, dt):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
-        the last guaranteed information and now
+        the last guaranteed information and now\n
+        NOTE: this implementation is unstable in cases where the lowest ID in range changes dynamically, and 
+        may have some multithreading bugs between this and the clustering algorithm
         - obj: ObjectDescription object
         - dt: Change in time between last application of KF and now
         ''' 
-        kf = obj.get_kalman_filter()
+        _, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
 
-        kf.set_A(dt)
-        
-        if kf.get_update_num() == -1: 
-            # TODO set x_vec and ref_frame
-            
-            # kf.set_ref_frame(self.)
-            
-            
-            print("starting KF for first time for this object")
+        if len(neighbors_in_range_list) > 1 and self.neighbor_manager.local_robot_is_broker():
+            kf = obj.get_kalman_filter()
 
-        # TODO continue this
-        kf.predict()
-        kf.update()
+            kf.set_A(dt)
+            
+            # Might have to set this every single time
+            if kf.get_update_num() == -1: 
+                # Future work: replace velocity with twist from odometry message, and use rotation info
+                if obj.robot_id == self.params['robot_id']: 
+                    pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_entered[obj.robot_id]}']
+                    pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
+
+                    x_pos = pose_then.position.x - pose_now.position.x
+                    y_pos = pose_then.position.y - pose_now.position.y
+                    z_pos = pose_then.position.z - pose_now.position.z
+
+                    kf.set_ref_frame(self.params['robot_id'], np.array([[x_pos], [y_pos], [z_pos], [0], [0], [0]]))
+                else: 
+                    # broker_pose_now = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_entered[obj.robot_id]}']
+                    other_pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_entered[obj.robot_id]}']
+                    other_pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
+
+                    transform_stamped = self.current_transforms[self.params['robot_id']][obj.robot_id] 
+
+                    x_pos = (transform_stamped.transform.translation.x + other_pose_then.position.x - other_pose_now.position.x)
+                    y_pos = (transform_stamped.transform.translation.y + other_pose_then.position.y - other_pose_now.position.y)
+                    z_pos = (transform_stamped.transform.translation.z + other_pose_then.position.z - other_pose_now.position.z)
+                
+                    kf.set_ref_frame(self.params['robot_id'], np.array([[x_pos], [y_pos], [z_pos], [0], [0], [0]]))
+                
+                kf.set_update_num(kf.get_update_num() + 1)
+            # TODO figure out else block, and use this to change dist, pitch, yaw
+
+        kf.predict_and_update(self.params['robot_id'])
                 
     def update_association_info(self, obj, parent_key, curr_time): 
         '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n

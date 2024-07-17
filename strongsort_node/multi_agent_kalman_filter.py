@@ -2,9 +2,9 @@ import numpy as np
 
 class KalmanFilter(): 
     def __init__(self):
-        self.ref_frame = -1
+        self.ref_frame = {} # Key: broker robot_id; Value: x_vec 6-len array
         self.update_num = -1
-        self.x_vec = np.array([[0], [0], [0], [0], [0], [0]])
+        # self.x_vec = np.array([[0], [0], [0], [0], [0], [0]])
         self.P = np.eye(6, dtype=int) * 15
         # TODO Assign dt part to A dynamically
         self.A = np.eye(6, dtype=int)
@@ -16,6 +16,50 @@ class KalmanFilter():
                            [0, 0, 0, 5, 2, 2], 
                            [0, 0, 0, 2, 5, 2], 
                            [0, 0, 0, 2, 2, 5]])
+        
+    def predict_and_update(self, broker_id): 
+        pred_mean, pred_cov = self.predict(broker_id)
+        updated_mean, updated_cov = self.update(broker_id, pred_mean, pred_cov)
+
+        self.set_ref_frame(broker_id, updated_mean)
+        self.set_P(updated_cov)
+
+        
+    def predict(self, broker_id): 
+        '''Predict step
+        - broker_id: robot_id of agent of which these vectors are in the reference frame of
+        Return: 
+        - x_p: mean predicted location
+        - P_p: covariance of predicted location
+        '''
+
+        x_p = self.A.dot(self.ref_frame[broker_id])
+        P_p = self.A.dot(self.P).dot(self.A.T) + self.Q
+
+        return x_p, P_p
+
+    def update(self, broker_id, x_p, P_p): 
+
+        # Kalman gain
+        S = self.H.dot(P_p).dot(self.H.T) + self.R
+        K = P_p.dot(self.H.T)*(1/S)
+
+        # Estimate state
+        residual = z - self.H.dot(x_p)
+        self.ref_frame[broker_id] = x_p + K*residual
+
+        self.P = P_p - K.dot(self.H).dot(P_p)
+
+        return self.ref_frame[broker_id], self.P
+    
+    def set_ref_frame(self, broker_id, x_vec): 
+        self.ref_frame[broker_id] = x_vec
+
+    def get_ref_frame(self, broker_id): 
+        return self.ref_frame[broker_id]
+    
+    def set_P(self, cov): 
+        self.P = cov
 
     def get_update_num(self): 
         return self.update_num
