@@ -32,6 +32,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(
   PROGRAMS
   strongsort_node/track_ros_setup.py
+  strongsort_node/associations_ros_driver.py
   launch/strongsort_node_launch.py
   osnet_ain_x1_0_msmt17.pt
   osnet_x0_25_market1501.pt
