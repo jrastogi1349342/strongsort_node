@@ -7,6 +7,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
 from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection, UnifiedObjectIDs
+from tf2_ros import TransformBroadcaster
 import math
 from scipy.spatial.transform import Rotation as R
 
@@ -98,6 +99,8 @@ class StrongSortPublisher(object):
             MOTGlobalDescriptors, 
             f"/mot/descriptors", 
             100)
+        
+        self.tf_broadcaster = TransformBroadcaster(self)
         
         self.unified_id_mapping = {}
         
@@ -356,7 +359,7 @@ class StrongSortPublisher(object):
                             ))
                         quat = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
                         quat_scipy = R.from_quat([0.0, 0.0, 0.0, 1.0])
-                        quat_scipy_inv = quat_scipy.inv().as_quat
+                        quat_scipy_inv = quat_scipy.inv().as_quat()
                         quat_inv = Quaternion(x=quat_scipy_inv[0], y=quat_scipy_inv[1], z=quat_scipy_inv[2], w=quat_scipy_inv[3])
                         if self.params['robot_id'] == 0: 
                             colocalization.child_frame_id = "B_odom"
@@ -499,6 +502,32 @@ class StrongSortPublisher(object):
     #         self.mot_pub.publish(MOTGlobalDescriptors(
     #             header=Header(stamp=self.node.get_clock().now().to_msg()), 
     #             descriptors=list(abbrev_descriptor_dict.values())))
+        
+        
+    def broadcast_transform_callback(self): 
+        '''Send callback relating transform from agent 1 to agent 2 
+        every 0.1 seconds, if robot has ID 0 only because sending from 
+        both is unnecessary\n
+        Update translation and rotation as necessary (ie not static)
+        '''
+        if self.params['robot_id'] == 0: 
+            t = TransformStamped()
+
+            t.header.stamp = self.get_clock().now().to_msg()
+            t.header.frame_id = 'A_odom'
+            t.child_frame_id = 'B_odom'
+
+            t.transform.translation.x = 1.0
+            t.transform.translation.y = 0.0
+            t.transform.translation.z = 0.0
+
+            t.transform.rotation.x = 0.0
+            t.transform.rotation.y = 0.0
+            t.transform.rotation.z = 0.0
+            t.transform.rotation.w = 1.0
+
+            # Send the transformation
+            self.tf_broadcaster.sendTransform(t)
         
             
     # UnifiedObjectIDs message

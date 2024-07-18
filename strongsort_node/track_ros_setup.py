@@ -191,8 +191,8 @@ class StrongSortSetup(Node):
             allow_headerless=True)
         self.ts.registerCallback(self.mot_publishers.video_callback)
 
-        self.tf_broadcaster = TransformBroadcaster(self)
-        # self.A_to_B = self.create_timer(0.1, self.broadcast_pose, clock=Clock())
+        # Timer to broadcast transform from A to B
+        self.A_to_B = self.create_timer(0.1, self.mot_publishers.broadcast_transform_callback, clock=Clock())
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -245,24 +245,6 @@ class StrongSortSetup(Node):
 
         print(odom_rot_mtx.as_euler("xyz", degrees=True))
         
-    def broadcast_pose(self): 
-        t = TransformStamped()
-
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'A_odom'
-        t.child_frame_id = 'B_odom'
-
-        t.transform.translation.x = 1.0
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.0
-
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.0
-        t.transform.rotation.z = 0.0
-        t.transform.rotation.w = 1.0
-
-        # Send the transformation
-        self.tf_broadcaster.sendTransform(t)
 
         
     def tf_callback_test(self, A_msg, B_msg): 
@@ -272,18 +254,6 @@ class StrongSortSetup(Node):
                 rclpy.time.Time()
             )
 
-            # t = self.tf_buffer.lookup_transform_async(
-            #     A_msg.header.frame_id, 
-            #     B_msg.header.frame_id, 
-            #     rclpy.time.Time()
-            # )
-            # t = self.tf_buffer.lookup_transform(
-            #     A_msg.header.frame_id, 
-            #     A_msg.header.stamp, 
-            #     B_msg.header.frame_id, 
-            #     B_msg.header.stamp, 
-            #     rclpy.time.Time())
-            
             print(t.transform.translation)
             print(t.transform.rotation)
             print("\n")

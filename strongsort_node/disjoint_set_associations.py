@@ -11,16 +11,13 @@ class DisjointSetAssociations:
         self.rank = {} # value: int
         self.parent = {} # value: string
         self.obj_desc = {} # value: ObjectDescription 
-        self.is_parent = {}
-
-    # Key is string
-    # def __init__(self, mot_global_desc_arr): 
-    #     self.insert_arr(mot_global_desc_arr)
+        self.is_parent = {} # value: bool
 
     def insert(self, obj, key, curr_time): 
         self.rank.update({key: 1})
         self.parent.update({key: key})
         self.obj_desc.update({key: ObjectDescription(
+            frame_id=obj.header.frame_id,
             dist=obj.distance, 
             pitch=obj.pitch, 
             yaw=obj.yaw, 
@@ -116,12 +113,14 @@ class DisjointSetAssociations:
     def get_keys_in_cluster(self, parent_key): 
         lst = [parent_key]
         
-        for robot_id, obj_id in self.obj_desc[parent_key].children: 
-            lst.append(f'{robot_id}.{obj_id}')
+        for obj_key in self.obj_desc[parent_key].children.values(): 
+            lst.append(obj_key)
             
         return lst
     
     def get_all_clustered_keys(self): 
+        '''Returns list of lists: each inner list is all the nodes in the cluster
+        '''
         final_lst = []
         parents = self.get_parents_keys()
         for key in parents: 
@@ -131,10 +130,13 @@ class DisjointSetAssociations:
     
     # No negative values in clusters
     def get_obj_id_in_cluster(self, parent_key, robot_id): 
+        '''Returns object ID of the detection in a specific cluster, denoted by 
+        parent_key, for a specific robot_id
+        '''
         if f'{robot_id}.' in parent_key: 
-            return self.obj_desc[parent_key].robot_id
+            return self.obj_desc[parent_key].obj_id
         else: 
             if robot_id in self.obj_desc[parent_key].children: 
-                return self.obj_desc[parent_key].children[robot_id]
+                return self.obj_desc[parent_key].children[robot_id].split(".", 1)[1]
             else: 
                 return -1

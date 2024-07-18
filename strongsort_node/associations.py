@@ -3,17 +3,19 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.clock import Clock
-import math
-import heapq
-import numpy as np
-
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
-from scipy.spatial.transform import Rotation as R
 
 from strongsort_msgs.msg import MOTGlobalDescriptors, UnifiedObjectIDs
 from strongsort_node.neighbors_manager import NeighborManager
 from strongsort_node.disjoint_set_associations import DisjointSetAssociations
 
+import math
+import heapq
+import numpy as np
+from numpy.linalg import norm
+from scipy.spatial.transform import Rotation as R
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial import distance
 
@@ -30,6 +32,7 @@ class ObjectAssociation(object):
         self.pose_dict = {} 
         
         # Key: {robot_id (from)}; Value: {Key: {robot_id_to}; Value: {TransformStamped message}}
+        # This is useless - TODO delete after integrating tf2 transforms
         self.current_transforms = {} 
         for i in range(self.params['max_nb_robots']): 
             self.current_transforms[i] = {}
@@ -38,12 +41,16 @@ class ObjectAssociation(object):
         self.last_time_entered = -1 # last time new information entered via callback
         self.last_time_clustered = -1 # last time the information was clustered
 
-        # Get info from all robots --> TODO fix this
+        # Get info from all robots
         self.info_sub = self.node.create_subscription(
             MOTGlobalDescriptors, 
             f"/mot/descriptors", 
             self.info_callback, 
             100)
+        
+        # Get info about transforms between agents
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self.node)
         
         # Goes to all robots but only the robot with the right robot ID uses it for anything
         self.unified_publishers_arr = {}
@@ -113,7 +120,7 @@ class ObjectAssociation(object):
     #             # else: 
     #             #     obj_desc.set_time(curr_time)
                     
-    #                 # TODO deal with kalman filter later (and push implementation from home laptop)
+    #                 # TODO deal with kalman filter later 
     #                 # self.apply_kf(obj_desc, delta_t)
                     
     #             self.last_time_agent_entered[robot_id] = curr_time
@@ -152,8 +159,9 @@ class ObjectAssociation(object):
 
         self.unified.delete(parent)
         
-    # TODO write this function
-    # Collectively decrease confidence in object location at once for old detections
+    # TODO finish this function
+    # Collectively decrease confidence in object location at once for old detections/use the fact that confidence isn't 
+    # the highest to update kf in some other way
     def apply_kf(self, obj, dt):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
@@ -210,11 +218,11 @@ class ObjectAssociation(object):
                 
         if obj.max_confidence > self.unified.obj_desc[parent_key].descriptor_conf: 
             self.unified.obj_desc[parent_key].descriptor_conf = obj.max_confidence
-            self.unified.obj_desc[parent_key].feature_desc = obj.best_descriptor
+            self.unified.obj_desc[parent_key].feature_desc = list(obj.best_descriptor)
             
     def update_colocalization(self, obj, curr_time): 
         self.pose_dict.update({f'{obj.robot_id}.{curr_time}': obj.pose})
-        self.current_transforms[obj.robot_id].update({f'{obj.robot_id_to}': obj.colocalization})
+        self.current_transforms[obj.robot_id].update({obj.robot_id_to: obj.colocalization})
 
     def detect_inter_robot_associations(self): 
         '''Detect inter-robot object associations: runs every self.params['sort.re_cluster_secs'] 
@@ -295,13 +303,14 @@ class ObjectAssociation(object):
                     
                     # r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
                     # r1_id, r1_time, r1_dist, r1_pitch, r1_yaw
-                    check_odom = self.check_same_location(j_info.robot_id, j_info.time, 
+                    check_odom = self.check_same_location(j_info.frame_id, j_info.robot_id, j_info.time, 
                                                           j_info.dist, j_info.pitch, j_info.yaw, 
-                                                          k_info.robot_id, k_info.time, 
+                                                          k_info.frame_id, k_info.robot_id, k_info.time, 
                                                           k_info.dist, k_info.pitch, k_info.yaw)
                     
-                    if not check_odom: 
-                        continue
+                    # Temp removed to test feature description + union - TODO re-add
+                    # if not check_odom: 
+                    #     continue
                     
                     # Assume there's only one bounding box around any given object, due to NMS working perfectly
                     check_feature_desc = self.check_features(j_info.feature_desc, k_info.feature_desc)
@@ -310,15 +319,17 @@ class ObjectAssociation(object):
                         heapq.heappush(heap, (-1 * check_feature_desc, k_info.obj_id)) # heapq is a min heap, NOT a max heap
             
                 if len(heap) != 0: 
-                    _, closest_obj_id = heapq.heappop(heap)                
-                    self.unified.union(j, f"{k.robot_id}.{closest_obj_id}")
+                    _, closest_obj_id = heapq.heappop(heap)
+                    self.unified.union(j, f"{i + 1}.{closest_obj_id}")
 
         self.last_time_clustered = latest_msg_time
 
         
-    def check_same_location(self, r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
-                            r1_id, r1_time, r1_dist, r1_pitch, r1_yaw): 
-        colocalization = self.get_colocalize_transform(r0_id, r0_time, r1_id, r1_time)
+    def check_same_location(self, r0_frame_id, r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
+                            r1_frame_id, r1_id, r1_time, r1_dist, r1_pitch, r1_yaw): 
+        # Type: geometry_msgs/Transform
+        colocalization = self.get_colocalize_transform(r0_frame_id, r0_id, r0_time, 
+                                                       r1_frame_id, r1_id, r1_time)
         
         # Assumes user is looking forward
         # Using spherical coords: pitch is 0 (up) to 180 (down) degrees, yaw is 0 to 360 degrees
@@ -328,59 +339,116 @@ class ObjectAssociation(object):
         r1_base = [r1_dist * math.cos(r1_pitch) * math.sin(r1_yaw), 
                    r1_dist * math.cos(r1_pitch) * math.cos(r1_yaw), 
                    r1_dist * math.cos(r1_pitch)]
-        
-        r1_trans = []
-        r1_trans[0] = r1_base[0] - colocalization.transform.translation.x
-        r1_trans[1] = r1_base[1] - colocalization.transform.translation.y
-        r1_trans[2] = r1_base[2] - colocalization.transform.translation.z
 
-        quat_ros = colocalization.transform.rotation
+        quat_ros = colocalization.rotation
         quat = R.from_quat([quat_ros.x, quat_ros.y, quat_ros.z, quat_ros.w])
         
-        r1_trans_rot = quat.as_matrix * r1_trans
+        print(f"Quat as mtx: {quat.as_matrix()}\tr0_base: {r0_base}")
+        
+        r1_rot = quat.as_matrix().dot(r1_base)
+        
+        r1_trans_rot = np.zeros(3)
+        r1_trans_rot[0] = r1_rot[0] - colocalization.translation.x
+        r1_trans_rot[1] = r1_rot[1] - colocalization.translation.y
+        r1_trans_rot[2] = r1_rot[2] - colocalization.translation.z
+        
+        print(f'Transformed: {r1_trans_rot}')
         
         return distance.euclidean(r0_base, r1_trans_rot) < self.params['sort.location_epsilon']
         
     # r0 will have a lower robot_id than r1                    
-    def get_colocalize_transform(self, r0_id, r0_time, r1_id, r1_time): 
+    def get_colocalize_transform(self, r0_frame_id, r0_id, r0_time, r1_frame_id, r1_id, r1_time): 
         '''Get transformation between the frames of two different agents at two different times, using 
         information on agent pose over time and current colocalization\n
         Eg: use dictionary for r0_(t-3) to r0_t, current colocalization to convert from r0_t to r1_t, 
         and dictionary from r1_t to r1_(t-5)
         '''
-        # print(self.pose_dict.keys())
-        a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
-        b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
-        
-        a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_agent_entered[r0_id]}']
-        b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_agent_entered[r1_id]}']
-        
-        print(self.current_transforms)
-        # Debugged until here - TODO continue
-        transform_stamped = self.current_transforms[r0_id][r1_id] # from a_pose_now to b_pose_now
-        
-        # TODO figure out quaternion here
-        desired_transform = Transform(
+        # TODO test this
+        try: 
+            curr_transform = self.tf_buffer.lookup_transform(r0_frame_id, r1_frame_id, rclpy.time.Time())
+            
+            a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
+            b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
+            
+            a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_agent_entered[r0_id]}']
+            b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_agent_entered[r1_id]}']
+            
             translation=Vector3(
                 x=(a_pose_now.position.x - a_pose_then.position.x + 
-                   transform_stamped.transform.translation.x + b_pose_then.position.x - 
+                   curr_transform.transform.translation.x + b_pose_then.position.x - 
                    b_pose_now.position.x),
                 y=(a_pose_now.position.y - a_pose_then.position.y + 
-                   transform_stamped.transform.translation.y + b_pose_then.position.y - 
+                   curr_transform.transform.translation.y + b_pose_then.position.y - 
                    b_pose_now.position.y),
                 z=(a_pose_now.position.z - a_pose_then.position.z + 
-                   transform_stamped.transform.translation.z + b_pose_then.position.z - 
-                   b_pose_now.position.z),
-            ), 
-            orientation=Quaternion()
-        )
+                   curr_transform.transform.translation.z + b_pose_then.position.z - 
+                   b_pose_now.position.z)
+            )
+            
+            transform_quat_ros = curr_transform.transform.rotation
+            transform_quat = R.from_quat([transform_quat_ros.x, transform_quat_ros.y, transform_quat_ros.z, transform_quat_ros.w])
+
+            # TODO figure out quaternion here
+            # Then inverse * transform quat
+            a_quat_ros_then = a_pose_then.orientation
+            a_quat_then = R.from_quat([a_quat_ros_then.x, a_quat_ros_then.y, a_quat_ros_then.z, a_quat_ros_then.w])
+
+            a_quat_ros_now = a_pose_now.orientation
+            a_quat_now = R.from_quat([a_quat_ros_now.x, a_quat_ros_now.y, a_quat_ros_now.z, a_quat_ros_now.w])
+
+
+            # Rot from a_then to a_now: 
+            a_quat_then_to_now = a_quat_then.inv() * a_quat_now
+            
+            b_quat_ros_then = b_pose_then.orientation
+            b_quat_then = R.from_quat([b_quat_ros_then.x, b_quat_ros_then.y, b_quat_ros_then.z, b_quat_ros_then.w])
+
+            b_quat_ros_now = b_pose_now.orientation
+            b_quat_now = R.from_quat([b_quat_ros_now.x, b_quat_ros_now.y, b_quat_ros_now.z, b_quat_ros_now.w])
+
+            # Rot from a_then to a_now: 
+            b_quat_now_to_then = b_quat_now.inv() * b_quat_then
+            
+            final_quat = a_quat_then_to_now * transform_quat * b_quat_now_to_then
+            # TODO use final_quat
+            
+        except Exception as e: 
+            print(f"Exception with colocalization transformation: {e}")
+
+        # # print(self.pose_dict.keys())
+        # a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
+        # b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
         
-        return desired_transform
+        # a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_agent_entered[r0_id]}']
+        # b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_agent_entered[r1_id]}']
+        
+        # print(self.current_transforms)
+        # transform_stamped = self.current_transforms[r0_id][r1_id] # from a_pose_now to b_pose_now
+        
+        # desired_transform = Transform(
+        #     translation=Vector3(
+        #         x=(a_pose_now.position.x - a_pose_then.position.x + 
+        #            transform_stamped.transform.translation.x + b_pose_then.position.x - 
+        #            b_pose_now.position.x),
+        #         y=(a_pose_now.position.y - a_pose_then.position.y + 
+        #            transform_stamped.transform.translation.y + b_pose_then.position.y - 
+        #            b_pose_now.position.y),
+        #         z=(a_pose_now.position.z - a_pose_then.position.z + 
+        #            transform_stamped.transform.translation.z + b_pose_then.position.z - 
+        #            b_pose_now.position.z),
+        #     ), 
+        #     rotation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+        # )
+        
+        # return desired_transform
         
     def check_features(self, r0_descriptor, r1_descriptor): 
         '''Get cosine similarity between the two descriptors
         '''
-        return cosine_similarity(r0_descriptor, r1_descriptor)
+        sim = np.dot(r0_descriptor, r1_descriptor)/(norm(r0_descriptor) * norm(r1_descriptor))
+        print(f'Similarity between r0 and r1: {sim}')
+        
+        return sim
     
     def unify_clustered_objects(self, neighbors_in_range_list): 
         '''Creates unified labeling for all clusters and publishes it: \n
@@ -398,20 +466,19 @@ class ObjectAssociation(object):
         parents = self.unified.get_parents_keys()
         for key in parents: 
             all_keys_in_cluster = self.unified.get_keys_in_cluster(key)
-            id_from_broker = self.unified.get_obj_id_in_cluster(key, self.params['robot_id'])
+            obj_id_from_broker = self.unified.get_obj_id_in_cluster(key, self.params['robot_id'])
             
-            if id_from_broker == -1: 
+            info_arr = cluster_key.split(".", 1)
+            if obj_id_from_broker == -1: 
                 for cluster_key in all_keys_in_cluster: 
-                    info_arr = cluster_key.split(".", 1)
                     if info_arr[0] in neighbors_in_range_list: 
                         unified_mapping[info_arr[0]].update({info_arr[1]: unified_id_no_broker})
                         
                 unified_id_no_broker -= 1
             else: 
                 for cluster_key in all_keys_in_cluster: 
-                    info_arr = cluster_key.split(".", 1)
                     if info_arr[0] in neighbors_in_range_list: 
-                        unified_mapping[info_arr[0]].update({info_arr[1]: id_from_broker})
+                        unified_mapping[info_arr[0]].update({info_arr[1]: obj_id_from_broker})
         
         for robot_id, mapping in unified_mapping.items(): 
             obj_ids = list(mapping.keys())            
