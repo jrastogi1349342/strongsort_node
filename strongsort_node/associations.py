@@ -77,6 +77,7 @@ class ObjectAssociation(object):
                 else: # In disjoint set somewhere 
                     self.update_association_info(obj, parent, new_time)
                     
+                    # TODO fix bug here 7/19/24
                     not_seen_clusters.remove(parent)
                     
                     # if len(self.unified.obj_desc[parent].children) > 0: 
@@ -309,6 +310,7 @@ class ObjectAssociation(object):
                                                           k_info.dist, k_info.pitch, k_info.yaw)
                     
                     # Temp removed to test feature description + union - TODO re-add
+                    print(f"Check odom: {check_odom}")
                     # if not check_odom: 
                     #     continue
                     
@@ -354,7 +356,11 @@ class ObjectAssociation(object):
         
         print(f'Transformed: {r1_trans_rot}')
         
-        return distance.euclidean(r0_base, r1_trans_rot) < self.params['sort.location_epsilon']
+        # TODO figure out why distance is > 2.5ish for each object
+        dist = distance.euclidean(r0_base, r1_trans_rot)
+        print(f"Distance between two objects: {dist}")
+        
+        return dist < self.params['sort.location_epsilon']
         
     # r0 will have a lower robot_id than r1                    
     def get_colocalize_transform(self, r0_frame_id, r0_id, r0_time, r1_frame_id, r1_id, r1_time): 
@@ -388,16 +394,16 @@ class ObjectAssociation(object):
             transform_quat_ros = curr_transform.transform.rotation
             transform_quat = R.from_quat([transform_quat_ros.x, transform_quat_ros.y, transform_quat_ros.z, transform_quat_ros.w])
 
-            # TODO figure out quaternion here
-            # Then inverse * transform quat
+            # TODO figure out quaternions here
             a_quat_ros_then = a_pose_then.orientation
             a_quat_then = R.from_quat([a_quat_ros_then.x, a_quat_ros_then.y, a_quat_ros_then.z, a_quat_ros_then.w])
 
             a_quat_ros_now = a_pose_now.orientation
             a_quat_now = R.from_quat([a_quat_ros_now.x, a_quat_ros_now.y, a_quat_ros_now.z, a_quat_ros_now.w])
 
-
-            # Rot from a_then to a_now: 
+            # Rot from a_then to a_now: then.inv() * now
+            # Verification: then * then_to_now = now
+            # Note: for all quaternions q, q = -q
             a_quat_then_to_now = a_quat_then.inv() * a_quat_now
             
             b_quat_ros_then = b_pose_then.orientation
@@ -406,11 +412,14 @@ class ObjectAssociation(object):
             b_quat_ros_now = b_pose_now.orientation
             b_quat_now = R.from_quat([b_quat_ros_now.x, b_quat_ros_now.y, b_quat_ros_now.z, b_quat_ros_now.w])
 
-            # Rot from a_then to a_now: 
+            # Rot from b_now to b_then: now.inv() * then
             b_quat_now_to_then = b_quat_now.inv() * b_quat_then
             
-            final_quat = a_quat_then_to_now * transform_quat * b_quat_now_to_then
-            # TODO use final_quat
+            final_rot = a_quat_then_to_now * transform_quat * b_quat_now_to_then
+            final_quat = final_rot.as_quat()
+            final_quat_ros = Quaternion(x=final_quat[0], y=final_quat[1], z=final_quat[2], w=final_quat[3])
+            
+            return Transform(translation=translation, rotation=final_quat_ros)
             
         except Exception as e: 
             print(f"Exception with colocalization transformation: {e}")
@@ -468,15 +477,16 @@ class ObjectAssociation(object):
             all_keys_in_cluster = self.unified.get_keys_in_cluster(key)
             obj_id_from_broker = self.unified.get_obj_id_in_cluster(key, self.params['robot_id'])
             
-            info_arr = cluster_key.split(".", 1)
             if obj_id_from_broker == -1: 
                 for cluster_key in all_keys_in_cluster: 
+                    info_arr = cluster_key.split(".", 1)
                     if info_arr[0] in neighbors_in_range_list: 
                         unified_mapping[info_arr[0]].update({info_arr[1]: unified_id_no_broker})
                         
                 unified_id_no_broker -= 1
             else: 
                 for cluster_key in all_keys_in_cluster: 
+                    info_arr = cluster_key.split(".", 1)
                     if info_arr[0] in neighbors_in_range_list: 
                         unified_mapping[info_arr[0]].update({info_arr[1]: obj_id_from_broker})
         

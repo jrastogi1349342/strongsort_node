@@ -183,7 +183,7 @@ class StrongSortSetup(Node):
                                             depth=5, 
                                             )
                                         )
-                
+                                        
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync], 
             queue_size=10, 

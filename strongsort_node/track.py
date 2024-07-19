@@ -100,7 +100,7 @@ class StrongSortPublisher(object):
             f"/mot/descriptors", 
             100)
         
-        self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_broadcaster = TransformBroadcaster(self.node)
         
         self.unified_id_mapping = {}
         
@@ -513,7 +513,7 @@ class StrongSortPublisher(object):
         if self.params['robot_id'] == 0: 
             t = TransformStamped()
 
-            t.header.stamp = self.get_clock().now().to_msg()
+            t.header.stamp = self.node.get_clock().now().to_msg()
             t.header.frame_id = 'A_odom'
             t.child_frame_id = 'B_odom'
 

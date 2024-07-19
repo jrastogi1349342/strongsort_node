@@ -45,7 +45,7 @@ def launch_setup(context, *args, **kwargs):
     return [
         # DeclareLaunchArgument('prefix', default_value=LaunchConfiguration('namespace').perform(context).replace("/",'')),
         strongsort_node, 
-        # association_node
+        association_node
     ]
 
 
