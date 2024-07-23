@@ -17,9 +17,9 @@ class KalmanFilter():
                            [0, 0, 0, 2, 5, 2], 
                            [0, 0, 0, 2, 2, 5]])
         
-    def predict_and_update(self, broker_id): 
+    def predict_and_update(self, broker_id, new): 
         pred_mean, pred_cov = self.predict(broker_id)
-        updated_mean, updated_cov = self.update(broker_id, pred_mean, pred_cov)
+        updated_mean, updated_cov = self.update(broker_id, pred_mean, pred_cov, new)
 
         self.set_ref_frame(broker_id, updated_mean)
         self.set_P(updated_cov)
@@ -38,14 +38,14 @@ class KalmanFilter():
 
         return x_p, P_p
 
-    def update(self, broker_id, x_p, P_p): 
+    def update(self, broker_id, x_p, P_p, new): 
 
         # Kalman gain
         S = self.H.dot(P_p).dot(self.H.T) + self.R
         K = P_p.dot(self.H.T)*(1/S)
 
         # Estimate state
-        residual = z - self.H.dot(x_p)
+        residual = new - self.H.dot(x_p)
         self.ref_frame[broker_id] = x_p + K*residual
 
         self.P = P_p - K.dot(self.H).dot(P_p)

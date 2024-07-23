@@ -21,7 +21,8 @@ def launch_setup(context, *args, **kwargs):
                     'video_topic': '/rm_vlc_leftfront/image', 
                     'name_space': LaunchConfiguration('name_space'), 
                     "robot_id": LaunchConfiguration('robot_id'), 
-                    "max_nb_robots": LaunchConfiguration('max_nb_robots')
+                    "max_nb_robots": LaunchConfiguration('max_nb_robots'), 
+                    "show_video": True
                  }
             ], 
             # namespace=LaunchConfiguration('namespace')

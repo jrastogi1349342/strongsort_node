@@ -423,6 +423,8 @@ class StrongSortPublisher(object):
                                 pose=odom_msg.pose.pose,
                                 colocalization = colocalization
                             )
+                            
+                        self.unified_id_mapping.update({id: id})
                         
                         if self.params['save_text']:
                             # Write MOT compliant results to file
@@ -511,23 +513,37 @@ class StrongSortPublisher(object):
         Update translation and rotation as necessary (ie not static)
         '''
         if self.params['robot_id'] == 0: 
-            t = TransformStamped()
+            t1 = TransformStamped()
+            t2 = TransformStamped()
 
-            t.header.stamp = self.node.get_clock().now().to_msg()
-            t.header.frame_id = 'A_odom'
-            t.child_frame_id = 'B_odom'
+            t1.header.stamp = self.node.get_clock().now().to_msg()
+            t2.header.stamp = t1.header.stamp
+            
+            t1.header.frame_id = 'world'
+            t1.child_frame_id = 'A_odom'
+            
+            t2.header.frame_id = 'world'
+            t2.child_frame_id = 'B_odom'
 
-            t.transform.translation.x = 1.0
-            t.transform.translation.y = 0.0
-            t.transform.translation.z = 0.0
+            t1.transform.translation.x = 0.0 # meters
+            t1.transform.translation.y = 0.0
+            t1.transform.translation.z = 0.0
+            t1.transform.rotation.x = 0.0
+            t1.transform.rotation.y = 0.0
+            t1.transform.rotation.z = 0.0
+            t1.transform.rotation.w = 1.0
 
-            t.transform.rotation.x = 0.0
-            t.transform.rotation.y = 0.0
-            t.transform.rotation.z = 0.0
-            t.transform.rotation.w = 1.0
+            t2.transform.translation.x = 0.3333 # meters
+            t2.transform.translation.y = 0.0
+            t2.transform.translation.z = 0.0
+            t2.transform.rotation.x = 0.0
+            t2.transform.rotation.y = 0.0
+            t2.transform.rotation.z = 0.0
+            t2.transform.rotation.w = 1.0
 
-            # Send the transformation
-            self.tf_broadcaster.sendTransform(t)
+            # Send the transformations
+            self.tf_broadcaster.sendTransform(t1)
+            self.tf_broadcaster.sendTransform(t2)
         
             
     # UnifiedObjectIDs message

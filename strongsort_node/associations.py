@@ -3,9 +3,11 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.clock import Clock
+from rclpy.time import Time, Duration
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
-from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
+from tf2_geometry_msgs import do_transform_vector3
+from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped, Pose
 
 from strongsort_msgs.msg import MOTGlobalDescriptors, UnifiedObjectIDs
 from strongsort_node.neighbors_manager import NeighborManager
@@ -77,8 +79,9 @@ class ObjectAssociation(object):
                 else: # In disjoint set somewhere 
                     self.update_association_info(obj, parent, new_time)
                     
-                    # TODO fix bug here 7/19/24
-                    not_seen_clusters.remove(parent)
+                    # Perhaps fixed bug, figure out when using kalman filter
+                    if parent in not_seen_clusters: 
+                        not_seen_clusters.remove(parent)
                     
                     # if len(self.unified.obj_desc[parent].children) > 0: 
                     #     num_parents_with_children += 1
@@ -87,6 +90,7 @@ class ObjectAssociation(object):
                 
             # print(f"Num of parents with children: {num_parents_with_children}")
             
+        print(f"Not seen clusters: {not_seen_clusters}")
         for not_seen_keys in not_seen_clusters: 
             if new_time - self.unified.obj_desc[not_seen_keys].time > self.params['sort.max_occlusion_time']: 
                 self.delete_association_tree(not_seen_keys)
@@ -96,58 +100,6 @@ class ObjectAssociation(object):
             #     self.apply_kf(self.unified.obj_desc[not_seen_keys], dt)
             
         print(f"Unified: {self.unified.get_all_clustered_keys()}")
-
-        
-    # # Version 2
-    # # Update last seen time of all info in unified set, and generalize old location with EKF
-    # # Insert all new messages into unified disjoint set, if new; if old, update last seen time to curr
-    # # For each new message: add to cluster
-    # # If object has not been seen in [some amount of time], delete
-    # def info_callback(self, global_desc_msg): 
-    #     # print(f"Before insertion into unified: {self.unified.get_all_clustered_keys()}")
-
-    #     curr_time = global_desc_msg.header.stamp.sec + (global_desc_msg.header.stamp.nanosec / 1000000000) 
-    #     if self.last_time_entered != -1: # if this is not the first time the callback is called
-    #         for parent in self.unified.get_parents_keys(): 
-    #             robot_id = int(parent.split(".", 1)[0])
-    #             # last time this specific parent or one of its children was entered into this set
-    #             last_time_agent_entered_val = self.last_time_agent_entered[robot_id]
-    #             delta_t = curr_time - last_time_agent_entered_val
-    #             obj_desc = self.unified.obj_desc[parent]
-                
-    #             if delta_t > self.params['sort.max_occlusion_time']: 
-    #                 print(f"Deleting {parent}")
-    #                 self.delete_association_tree(parent)
-    #             # else: 
-    #             #     obj_desc.set_time(curr_time)
-                    
-    #                 # TODO deal with kalman filter later 
-    #                 # self.apply_kf(obj_desc, delta_t)
-                    
-    #             self.last_time_agent_entered[robot_id] = curr_time
-                
-    #     self.last_time_entered = curr_time
-
-    #     if len(global_desc_msg.descriptors) > 0: 
-    #         # print(f"Size of descriptors: {len(global_desc_msg.descriptors)}")
-    #         # print(f"Robot ID: {global_desc_msg.descriptors[0].robot_id}")
-    #         self.last_time_agent_entered.update({global_desc_msg.descriptors[0].robot_id: curr_time})
-            
-    #         num_parents_with_children = 0
-    #         for obj in global_desc_msg.descriptors: 
-    #             key = f'{obj.robot_id}.{obj.obj_id}'
-    #             parent = self.unified.find(key)
-    #             if parent == '': # Not in disjoint set
-    #                 self.unified.insert(obj, key, curr_time)
-    #             else: # In disjoint set somewhere 
-    #                 self.update_association_info(obj, parent, curr_time)
-    #                 if len(self.unified.obj_desc[parent].children) > 0: 
-    #                     num_parents_with_children += 1
-                        
-    #             self.update_colocalization(obj, curr_time)
-                
-    #         print(f"Num of parents with children: {num_parents_with_children}")
-    #     print(f"Unified: {self.unified.get_all_clustered_keys()}")
 
     def delete_association_tree(self, parent): 
         '''Delete association tree, because the set of detections has not been seen recently
@@ -182,15 +134,51 @@ class ObjectAssociation(object):
             if kf.get_update_num() == -1: 
                 # Future work: replace velocity with twist from odometry message, and use rotation info
                 if obj.robot_id == self.params['robot_id']: 
-                    pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
-                    pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
-
-                    x_pos = pose_then.position.x - pose_now.position.x
-                    y_pos = pose_then.position.y - pose_now.position.y
-                    z_pos = pose_then.position.z - pose_now.position.z
-
-                    kf.set_ref_frame(self.params['robot_id'], np.array([[x_pos], [y_pos], [z_pos], [0], [0], [0]]))
+                    now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
+                    
+                    loc = Vector3(x=obj.dist * math.cos(obj.pitch) * math.sin(obj.yaw), 
+                            y=obj.dist * math.cos(obj.pitch) * math.cos(obj.yaw), 
+                            z=obj.dist * math.sin(obj.pitch))
+                    
+                    loc_trans = do_transform_vector3(loc, now_pose)
+                    
+                    # Object pose
+                    now_pose.position.x += loc_trans.x
+                    now_pose.position.y += loc_trans.y
+                    now_pose.position.z += loc_trans.z
+                    
+                    kf.set_ref_frame(self.params['robot_id'], 
+                                     np.array([[now_pose.position.x], [now_pose.position.y], [now_pose.position.z], [0], [0], [0]]))
                 else: 
+                    broker_now_pose = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[self.params['robot_id']]}']
+                    broker_now_time = self.time_float_to_time(self.last_time_agent_entered[self.params['robot_id']])
+                    
+                    other_pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
+                    other_now_time = self.time_float_to_time(obj.time)
+
+                    # TODO fix and debug this
+                    
+                    A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
+                        obj.frame_id, other_now_time, 
+                        "A_odom", broker_now_time, 
+                        "world", Duration(seconds=0.05)).transform
+                    
+                    r0_then_pose = self.apply_pose_transformation(A_now_to_r0_frame_then, broker_now_pose)
+
+                    loc = Vector3(x=obj.dist * math.cos(obj.pitch) * math.sin(obj.yaw), 
+                            y=obj.dist * math.cos(obj.pitch) * math.cos(obj.yaw), 
+                            z=obj.dist * math.sin(obj.pitch))
+                    
+                    loc_trans = do_transform_vector3(loc, now_pose)
+                    
+                    # Object pose
+                    now_pose.position.x += loc_trans.x
+                    now_pose.position.y += loc_trans.y
+                    now_pose.position.z += loc_trans.z
+                    
+                    r0_obj_loc = np.array([r0_then_pose.position.x, r0_then_pose.position.y, r0_then_pose.position.z])
+                    
+                    
                     # broker_pose_now = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[obj.robot_id]}']
                     other_pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                     other_pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
@@ -205,8 +193,17 @@ class ObjectAssociation(object):
                 
                 kf.set_update_num(kf.get_update_num() + 1)
             # TODO figure out else block, and use this to change dist, pitch, yaw
+            # else: 
+            #     if obj.robot_id == self.params['robot_id']: 
+            #         pose_now = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
+            #         pos = np.array([[pose_now.position.x], [y_pos], [z_pos], [0], [0], [0]])
 
-            kf.predict_and_update(self.params['robot_id'])
+            #         kf.predict_and_update(self.params['robot_id'], pos)
+            
+    def time_float_to_time(self, val): 
+        sec = math.floor(val)
+        ns = val - sec
+        return Time(seconds=sec, nanoseconds=ns)
                 
     def update_association_info(self, obj, parent_key, curr_time): 
         '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n
@@ -230,6 +227,8 @@ class ObjectAssociation(object):
         seconds from associations_ros_driver.py
         '''
         
+        self.single_agent_tests()
+        
         # neighbors_is_in_range: bool --> in range of any others?
         neighbors_is_in_range, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
         
@@ -245,6 +244,13 @@ class ObjectAssociation(object):
             # TODO get info every frame, and generalize StrongSORT + OSNet pipeline to relative poses from 
             # the perspective of the robot with the lowest agent ID (modifying Kalman Filter implementation) 
             # to deal with multi-agent associations
+
+    def single_agent_tests(self): 
+        first_key = self.unified.get_parents_keys()[0]
+        first_key_info = self.unified.obj_desc[first_key]
+        
+        self.single_agent_location_test(self, first_key_info.time, first_key_info.frame_id, 
+                                        first_key_info.dist, first_key_info.pitch, first_key_info.yaw)
 
     def cluster(self, curr_neighbors_in_range_set): 
         ''' Clusters all info of current neighbors in list
@@ -325,53 +331,204 @@ class ObjectAssociation(object):
                     self.unified.union(j, f"{i + 1}.{closest_obj_id}")
 
         self.last_time_clustered = latest_msg_time
-
         
+    def single_agent_location_test(self, r0_time, r0_frame_id, r0_dist, r0_pitch, r0_yaw): 
+        try: 
+            A_now_pose = self.pose_dict[f'0.{self.last_time_agent_entered[0]}']
+            A_now_time = self.last_time_agent_entered[0]
+            
+            r0_sec = math.floor(r0_time)
+            r0_ns = r0_time - r0_sec
+            r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
+            
+            A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
+                r0_frame_id, r0_when, 
+                "A_odom", A_now_time, 
+                "world", Duration(seconds=0.05)).transform
+            
+            r0_then_pose = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
+
+            r0_loc = Vector3(x=r0_dist * math.cos(r0_pitch) * math.sin(r0_yaw), 
+                      y=r0_dist * math.cos(r0_pitch) * math.cos(r0_yaw), 
+                      z=r0_dist * math.sin(r0_pitch))
+            
+            r0_loc_trans = do_transform_vector3(r0_loc, r0_then_pose)
+            
+            # Object pose
+            r0_then_pose.position.x += r0_loc_trans.x
+            r0_then_pose.position.y += r0_loc_trans.y
+            r0_then_pose.position.z += r0_loc_trans.z
+            
+            r0_obj_loc = np.array([r0_then_pose.position.x, r0_then_pose.position.y, r0_then_pose.position.z])
+            
+            print(f"A_now_pose: {A_now_pose.position}\nA_then_pose: {r0_then_pose}\nObject pose: {r0_obj_loc}")
+        except Exception as e: 
+            print(f"Exception with transformation: {e}")
+
+
     def check_same_location(self, r0_frame_id, r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
                             r1_frame_id, r1_id, r1_time, r1_dist, r1_pitch, r1_yaw): 
-        # Type: geometry_msgs/Transform
-        colocalization = self.get_colocalize_transform(r0_frame_id, r0_id, r0_time, 
-                                                       r1_frame_id, r1_id, r1_time)
-        
-        # Assumes user is looking forward
-        # Using spherical coords: pitch is 0 (up) to 180 (down) degrees, yaw is 0 to 360 degrees
-        r0_base = [r0_dist * math.cos(r0_pitch) * math.sin(r0_yaw), 
-                   r0_dist * math.cos(r0_pitch) * math.cos(r0_yaw), 
-                   r0_dist * math.cos(r0_pitch)]
-        r1_base = [r1_dist * math.cos(r1_pitch) * math.sin(r1_yaw), 
-                   r1_dist * math.cos(r1_pitch) * math.cos(r1_yaw), 
-                   r1_dist * math.cos(r1_pitch)]
+        '''Check if location of object is same between two robots and two timestamps\n
+        Convention is that translations are applied before rotations in Transform messages\n
+        NOTE: won't scale if A is not present in range
+        '''
+        try: 
+            A_now_pose = self.pose_dict[f'0.{self.last_time_agent_entered[0]}']
+            A_now_time = self.last_time_agent_entered[0]
+            
+            r0_sec = math.floor(r0_time)
+            r0_ns = r0_time - r0_sec
+            r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
+            
+            A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
+                r0_frame_id, r0_when, 
+                "A_odom", A_now_time, 
+                "world", Duration(seconds=0.05)).transform
+            
+            r0_then_pose = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
 
-        quat_ros = colocalization.rotation
-        quat = R.from_quat([quat_ros.x, quat_ros.y, quat_ros.z, quat_ros.w])
+            r0_loc = Vector3(x=r0_dist * math.cos(r0_pitch) * math.sin(r0_yaw), 
+                      y=r0_dist * math.cos(r0_pitch) * math.cos(r0_yaw), 
+                      z=r0_dist * math.sin(r0_pitch))
+            
+            r0_loc_trans = do_transform_vector3(r0_loc, r0_then_pose)
+            
+            # Object pose
+            r0_then_pose.position.x += r0_loc_trans.x
+            r0_then_pose.position.y += r0_loc_trans.y
+            r0_then_pose.position.z += r0_loc_trans.z
+            
+            r0_obj_loc = np.array([r0_then_pose.position.x, r0_then_pose.position.y, r0_then_pose.position.z])
+            
+            # --------------r1-----------------
+
+            
+            r1_sec = math.floor(r1_time)
+            r1_ns = r1_time - r1_sec
+            r1_when = Time(seconds=r1_sec, nanoseconds=r1_ns)
+            
+            A_now_to_r1_frame_then = self.tf_buffer.lookup_transform_full(
+                r1_frame_id, r1_when, 
+                "A_odom", A_now_time, 
+                "world", Duration(seconds=0.05)).transform
+            
+            r1_then_pose = self.apply_pose_transformation(A_now_to_r1_frame_then, A_now_pose)
+
+            r1_loc = Vector3(x=r1_dist * math.cos(r1_pitch) * math.sin(r1_yaw), 
+                      y=r1_dist * math.cos(r1_pitch) * math.cos(r1_yaw), 
+                      z=r1_dist * math.sin(r1_pitch))
+            
+            r1_loc_trans = do_transform_vector3(r1_loc, r1_then_pose)
+            
+            # Object pose
+            r1_then_pose.position.x += r1_loc_trans.x
+            r1_then_pose.position.y += r1_loc_trans.y
+            r1_then_pose.position.z += r1_loc_trans.z
+            
+            r1_obj_loc = np.array([r1_then_pose.position.x, r1_then_pose.position.y, r1_then_pose.position.z])
+
+            
+            dist = distance.euclidean(r0_obj_loc, r1_obj_loc)
+            print(f"Distance between obj from r0 ({r0_obj_loc}) and 
+                  r1 ({r1_obj_loc}): {dist}")
+            
+            return dist < self.params['sort.location_epsilon']
+
+
+        except Exception as e: 
+            print(f"Exception with transformation: {e}")
+
         
-        print(f"Quat as mtx: {quat.as_matrix()}\tr0_base: {r0_base}")
         
-        r1_rot = quat.as_matrix().dot(r1_base)
+        # # Type: geometry_msgs/Transform
+        # colocalization = self.get_colocalize_transform(r0_frame_id, r0_id, r0_time, 
+        #                                                r1_frame_id, r1_id, r1_time)
         
-        r1_trans_rot = np.zeros(3)
-        r1_trans_rot[0] = r1_rot[0] - colocalization.translation.x
-        r1_trans_rot[1] = r1_rot[1] - colocalization.translation.y
-        r1_trans_rot[2] = r1_rot[2] - colocalization.translation.z
+        # # Assumes user is looking forward
+        # # Using spherical coords: pitch is 0 (up) to 180 (down) degrees, yaw is 0 to 360 degrees
+        # r0_base = [r0_dist * math.cos(r0_pitch) * math.sin(r0_yaw), 
+        #            r0_dist * math.cos(r0_pitch) * math.cos(r0_yaw), 
+        #            r0_dist * math.sin(r0_pitch)]
+        # r1_base = [r1_dist * math.cos(r1_pitch) * math.sin(r1_yaw), 
+        #            r1_dist * math.cos(r1_pitch) * math.cos(r1_yaw), 
+        #            r1_dist * math.sin(r1_pitch)]
         
-        print(f'Transformed: {r1_trans_rot}')
+        # print(f"r0_base: {r0_base}\nr1_base: {r1_base}\nTranslation: {colocalization.translation}")
         
-        # TODO figure out why distance is > 2.5ish for each object
-        dist = distance.euclidean(r0_base, r1_trans_rot)
-        print(f"Distance between two objects: {dist}")
+        # # Apply translation 
+        # r0_trans = np.zeros(3)
+        # r0_trans[0] = r0_base[0] + colocalization.translation.x
+        # r0_trans[1] = r0_base[1] + colocalization.translation.y
+        # r0_trans[2] = r0_base[2] + colocalization.translation.z
+
+        # # Apply rotation
+        # quat_ros = colocalization.rotation
+        # quat = R.from_quat([quat_ros.x, quat_ros.y, quat_ros.z, quat_ros.w])
         
-        return dist < self.params['sort.location_epsilon']
+        # print(f"r0_trans: {r0_trans}\nQuat as mtx: {quat.as_matrix()}")
+        
+        # r0_trans_rot = quat.as_matrix().dot(r0_trans)
+        
+        # # r1_trans_rot = np.zeros(3)
+        # # r1_trans_rot[0] = r1_rot[0] - colocalization.translation.x
+        # # r1_trans_rot[1] = r1_rot[1] - colocalization.translation.y
+        # # r1_trans_rot[2] = r1_rot[2] - colocalization.translation.z
+        
+        # print(f'Transformed: {r0_trans_rot}')
+        
+        # # TODO figure out why distance is > 2.5ish for each object
+        # dist = distance.euclidean(r0_trans_rot, r1_base)
+        # print(f"Distance between r0_trans_rot ({r0_trans_rot}) and r1_base ({r1_base}): {dist}")
+        
+        # return dist < self.params['sort.location_epsilon']
+    
+    def apply_pose_transformation(self, transform, pose): 
+        '''Apply transform A -> B to pose A to get pose B
+        - transform: geometry_msgs/Transform message of A -> B
+        - pose: geometry_msgs/Pose message of A
+        '''
+        new_pose = Pose()
+        
+        new_pose.position.x = pose.position.x + transform.translation.x
+        new_pose.position.y = pose.position.y + transform.translation.y
+        new_pose.position.z = pose.position.z + transform.translation.z
+        
+        trans_quat_ros = transform.rotation
+        trans_quat = R.from_quat([trans_quat_ros.x, trans_quat_ros.y, trans_quat_ros.z, trans_quat_ros.w])
+
+        pose_quat_ros = pose.orientation
+        pose_quat = R.from_quat([pose_quat_ros.x, pose_quat_ros.y, pose_quat_ros.z, pose_quat_ros.w])
+        
+        new_quat = trans_quat * pose_quat
+        new_pose.orientation = Quaternion(x=new_quat.x, y=new_quat.y, z=new_quat.z, w=new_quat.w)
+        
+        return new_pose
         
     # r0 will have a lower robot_id than r1                    
     def get_colocalize_transform(self, r0_frame_id, r0_id, r0_time, r1_frame_id, r1_id, r1_time): 
         '''Get transformation between the frames of two different agents at two different times, using 
-        information on agent pose over time and current colocalization\n
+        information on agent pose over time and current colocalization: from r0_then to r1_then\n
         Eg: use dictionary for r0_(t-3) to r0_t, current colocalization to convert from r0_t to r1_t, 
         and dictionary from r1_t to r1_(t-5)
         '''
-        # TODO test this
         try: 
-            curr_transform = self.tf_buffer.lookup_transform(r0_frame_id, r1_frame_id, rclpy.time.Time())
+            # TODO test this - need to construct "world" fixed frame first
+            # r0_sec = math.floor(r0_time)
+            # r0_ns = r0_time - r0_sec
+            # r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
+            
+            # r1_sec = math.floor(r1_time)
+            # r1_ns = r1_time - r1_sec
+            # r1_when = Time(seconds=r1_sec, nanoseconds=r1_ns)
+            
+            # full_transform = self.tf_buffer.lookup_transform_full(
+            #     r1_frame_id, r1_when, 
+            #     r0_frame_id, r0_when, 
+            #     "world", Duration(seconds=0.05))
+            
+            
+            
+            curr_transform = self.tf_buffer.lookup_transform(r1_frame_id, r0_frame_id, rclpy.time.Time())
             
             a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
             b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
