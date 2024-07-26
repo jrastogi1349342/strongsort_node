@@ -58,7 +58,7 @@ class DisjointSetAssociations:
         return self.parent[x] 
   
     # Do union of two sets represented by x and y. 
-    # TODO delete information from child nodes to save memory
+    # TODO test deletion of info from from child nodes (to save memory)
     def union(self, x, y): 
           
         # Find current root ancestors of x and y 
@@ -75,8 +75,11 @@ class DisjointSetAssociations:
             self.parent[xset] = yset 
 
             self.obj_desc[yset].children.update({self.obj_desc[xset].robot_id: xset})
+            self.delete(xset)
+            
             for child_id, child_key in self.obj_desc[xset].children.items():
                 self.obj_desc[yset].children.update({child_id: child_key})
+                self.delete(child_key)
                 
             self.obj_desc[yset].time = self.obj_desc[yset].time if self.obj_desc[yset].time > self.obj_desc[xset].time else self.obj_desc[xset].time
             self.is_parent[xset] = False
@@ -85,8 +88,11 @@ class DisjointSetAssociations:
             self.parent[yset] = xset 
 
             self.obj_desc[xset].children.update({self.obj_desc[yset].robot_id: yset})
+            self.delete(yset)
+            
             for child_id, child_key in self.obj_desc[yset].children.items():
                 self.obj_desc[xset].children.update({child_id: child_key})
+                self.delete(child_key)
                 
             self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
             self.is_parent[yset] = False
@@ -98,8 +104,11 @@ class DisjointSetAssociations:
             self.rank[xset] = self.rank[xset] + 1
             
             self.obj_desc[xset].children.update({self.obj_desc[yset].robot_id: yset})
+            self.delete(yset)
+            
             for child_id, child_key in self.obj_desc[yset].children.items():
                 self.obj_desc[xset].children.update({child_id: child_key})
+                self.delete(child_key)
 
             self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
             self.is_parent[yset] = False

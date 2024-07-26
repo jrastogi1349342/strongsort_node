@@ -1,23 +1,9 @@
 import numpy as np
-from strongsort_node.kalman_filter_mot import KalmanFilter
+from strongsort_node.kalman_filter_mot import ModifiedKalmanFilter
+import math
 
 class ObjectDescription(): 
-    # Future work: replace dist value with probability distribution (ie mean, variance)
-    def __init__(self):
-        self.frame_id = ''
-        self.dist = -1 # phi
-        self.pitch = -1 # rho
-        self.yaw = -1 # theta
-        self.time = -1 # value: stamp.sec + stamp.nanosec
-        self.robot_id = -1
-        self.descriptor_conf = -1
-        self.feature_desc = []
-        self.class_id = -1
-        self.obj_id = -1
-        self.children = {}
-        self.kalman_filter = KalmanFilter()
-        
-                
+    # Future work: replace dist value with probability distribution (ie mean, variance)             
     def __init__(self, frame_id, dist, pitch, yaw, time, robot_id, 
                  descriptor_conf, feature_desc, class_id, obj_id, 
                  children): 
@@ -32,7 +18,12 @@ class ObjectDescription():
         self.class_id = class_id
         self.obj_id = obj_id
         self.children = children
-        self.kalman_filter = KalmanFilter()        
+        
+        x = dist * math.sin(pitch) * math.cos(yaw)
+        y = dist * math.sin(pitch) * math.sin(yaw)
+        z = dist * math.cos(pitch)
+        
+        self.kalman_filter = ModifiedKalmanFilter(robot_id, x, y, z)
         
     def get_time(self): 
         return self.time
@@ -40,5 +31,3 @@ class ObjectDescription():
     def set_time(self, new_time): 
         self.time = new_time
         
-    def get_kalman_filter(self): 
-        return self.kalman_filter

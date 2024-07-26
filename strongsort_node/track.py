@@ -240,7 +240,7 @@ class StrongSortPublisher(object):
             np_exp = np.expand_dims(np_stack, axis = 0) # (1, 3, 640, 480)
             im = torch.from_numpy(np_exp).to(0) # torch.Size([1, 3, 480, 640])
 
-        elif self.camera_type == 'color': # TODO test with Vision 60
+        elif self.camera_type == 'color': # TODO test with Vision 60 - (960 x 540)?
             img = self.bridge.imgmsg_to_cv2(img_msg, "bgr8") # presumably (640, 480, 3) 
             norm = img / 255 # Normalize
             norm_transpose = np.transpose(norm, (2, 0, 1))

@@ -1,76 +1,118 @@
 import numpy as np
+from filterpy.kalman import KalmanFilter, ExtendedKalmanFilter
+from filterpy.common import Q_discrete_white_noise
+import random
 
-class KalmanFilter(): 
-    def __init__(self):
-        self.ref_frame = {} # Key: broker robot_id; Value: x_vec 6-len array
-        self.update_num = -1
-        # self.x_vec = np.array([[0], [0], [0], [0], [0], [0]])
-        self.P = np.eye(6, dtype=int) * 15
-        # TODO Assign dt part to A dynamically
-        self.A = np.eye(6, dtype=int)
-        self.H = np.array([[1, 1, 1, 0, 0, 0]]) # Transpose is self.H.T
-        self.R = np.eye(3, dtype=int) * 5
-        self.Q = np.array([[1, 0, 0, 0, 0, 0], 
-                           [0, 1, 0, 0, 0, 0], 
-                           [0, 0, 1, 0, 0, 0], 
-                           [0, 0, 0, 5, 2, 2], 
-                           [0, 0, 0, 2, 5, 2], 
-                           [0, 0, 0, 2, 2, 5]])
+class ModifiedKalmanFilter(): 
+    def __init__(self, broker_id, x_init, y_init, z_init):
+        self.dt = -1
+        self.broker_id = broker_id
         
-    def predict_and_update(self, broker_id, new): 
-        pred_mean, pred_cov = self.predict(broker_id)
-        updated_mean, updated_cov = self.update(broker_id, pred_mean, pred_cov, new)
+        self.kf = KalmanFilter(dim_x=6, dim_z=3)
+        
+        self.kf.x = np.array([x_init, y_init, z_init, 0.0, 0.0, 0.0])
+        self.kf.H = np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], 
+                              [0.0, 1.0, 0.0, 0.0, 0.0, 0.0], 
+                              [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]])
+        self.kf.P *= 15.0 # Covariance mtx of system noise; default np.eye(6)
+        self.kf.R *= 10.0 # Covariance mtx of measurement noise; default np.eye(3)
+        # F (state transition mtx) and Q (process noise) changed around at runtime
 
-        self.set_ref_frame(broker_id, updated_mean)
-        self.set_P(updated_cov)
+    def predict(self, dt): 
+        self.kf.F[0, 3] = dt
+        self.kf.F[1, 4] = dt
+        self.kf.F[2, 5] = dt
+
+        self.kf.Q = Q_discrete_white_noise(dim=2, dt=dt, var=0.5, block_size=3, order_by_dim=False)
+        
+        self.kf.predict()
+        
+    def update(self, measurement): 
+        self.kf.update(measurement)
+
+    def get_state(self): 
+        return self.kf.x
+
+    def change_state_broker(self, new_broker_id, x_new, y_new, z_new): 
+        self.broker_id = new_broker_id
+        self.kf.x = np.array([x_new, y_new, z_new, 0.0, 0.0, 0.0])
+
+
+
+
+# ---------------------- Attempted custom implementation -----------------------------
+
+# class KalmanFilter(): 
+#     def __init__(self):
+#         self.ref_frame = {} # Key: broker robot_id; Value: x_vec 6-len array
+#         self.update_num = -1
+#         # self.x_vec = np.array([[0], [0], [0], [0], [0], [0]])
+#         self.P = np.eye(6, dtype=int) * 15
+#         # TODO Assign dt part to A dynamically
+#         self.A = np.eye(6, dtype=int)
+#         self.H = np.array([[1, 1, 1, 0, 0, 0]]) # Transpose is self.H.T
+#         self.R = np.eye(3, dtype=int) * 5
+#         self.Q = np.array([[1, 0, 0, 0, 0, 0], 
+#                            [0, 1, 0, 0, 0, 0], 
+#                            [0, 0, 1, 0, 0, 0], 
+#                            [0, 0, 0, 5, 2, 2], 
+#                            [0, 0, 0, 2, 5, 2], 
+#                            [0, 0, 0, 2, 2, 5]])
+        
+#     def predict_and_update(self, broker_id, new): 
+#         pred_mean, pred_cov = self.predict(broker_id)
+#         updated_mean, updated_cov = self.update(broker_id, pred_mean, pred_cov, new)
+
+#         self.set_ref_frame(broker_id, updated_mean)
+#         self.set_P(updated_cov)
 
         
-    def predict(self, broker_id): 
-        '''Predict step
-        - broker_id: robot_id of agent of which these vectors are in the reference frame of
-        Return: 
-        - x_p: mean predicted location
-        - P_p: covariance of predicted location
-        '''
+#     def predict(self, broker_id): 
+#         '''Predict step
+#         - broker_id: robot_id of agent of which these vectors are in the reference frame of
+#         Return: 
+#         - x_p: mean predicted location
+#         - P_p: covariance of predicted location
+#         '''
 
-        x_p = self.A.dot(self.ref_frame[broker_id])
-        P_p = self.A.dot(self.P).dot(self.A.T) + self.Q
+#         x_p = self.A.dot(self.ref_frame[broker_id])
+#         P_p = self.A.dot(self.P).dot(self.A.T) + self.Q
 
-        return x_p, P_p
+#         return x_p, P_p
 
-    def update(self, broker_id, x_p, P_p, new): 
+#     def update(self, broker_id, x_p, P_p, new): 
 
-        # Kalman gain
-        S = self.H.dot(P_p).dot(self.H.T) + self.R
-        K = P_p.dot(self.H.T)*(1/S)
+#         # Kalman gain
+#         S = self.H.dot(P_p).dot(self.H.T) + self.R
+#         K = P_p.dot(self.H.T)*(1/S)
 
-        # Estimate state
-        residual = new - self.H.dot(x_p)
-        self.ref_frame[broker_id] = x_p + K*residual
+#         # Estimate state
+#         residual = new - self.H.dot(x_p)
+#         self.ref_frame[broker_id] = x_p + K*residual
 
-        self.P = P_p - K.dot(self.H).dot(P_p)
+#         self.P = P_p - K.dot(self.H).dot(P_p)
 
-        return self.ref_frame[broker_id], self.P
+#         return self.ref_frame[broker_id], self.P
     
-    def set_ref_frame(self, broker_id, x_vec): 
-        self.ref_frame[broker_id] = x_vec
+#     def set_ref_frame(self, broker_id, x_vec): 
+#         self.ref_frame[broker_id] = x_vec
 
-    def get_ref_frame(self, broker_id): 
-        return self.ref_frame[broker_id]
+#     def get_ref_frame(self, broker_id): 
+#         return self.ref_frame[broker_id]
     
-    def set_P(self, cov): 
-        self.P = cov
+#     def set_P(self, cov): 
+#         self.P = cov
 
-    def get_update_num(self): 
-        return self.update_num
+#     def get_update_num(self): 
+#         return self.update_num
         
-    def set_update_num(self, new_num): 
-        self.update_num = new_num
+#     def set_update_num(self, new_num): 
+#         self.update_num = new_num
         
-    def set_A(self, dt): 
-        self.A[0, 3] = dt
-        self.A[1, 4] = dt
-        self.A[2, 5] = dt
+#     def set_A(self, dt): 
+#         self.A[0, 3] = dt
+#         self.A[1, 4] = dt
+#         self.A[2, 5] = dt
 
 
 # -------------------------- StrongSORT implementation ----------------------
