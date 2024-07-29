@@ -37,13 +37,7 @@ class ObjectAssociation(object):
         # Key: {robot_id}
         # Value: string frame id
         self.frame_ids = {}
-        
-        # # Key: {robot_id (from)}; Value: {Key: {robot_id_to}; Value: {TransformStamped message}}
-        # # This is useless - TODO delete after integrating tf2 transforms
-        # self.current_transforms = {} 
-        # for i in range(self.params['max_nb_robots']): 
-        #     self.current_transforms[i] = {}
-        
+                
         self.last_time_agent_entered = {}
         self.last_time_entered = -1 # last time new information entered via callback
         self.last_time_clustered = -1 # last time the information was clustered
@@ -88,7 +82,7 @@ class ObjectAssociation(object):
                     if parent in not_seen_clusters: 
                         not_seen_clusters.remove(parent)
                                             
-                self.update_colocalization(obj, new_time)
+                self.pose_dict.update({f'{obj.robot_id}.{new_time}': obj.pose})
                 
                 if obj.robot_id not in self.frame_ids: 
                     self.frame_ids.update({obj.robot_id: obj.header.frame_id})
@@ -199,10 +193,6 @@ class ObjectAssociation(object):
             self.unified.obj_desc[parent_key].descriptor_conf = obj.max_confidence
             self.unified.obj_desc[parent_key].feature_desc = list(obj.best_descriptor)
             
-    def update_colocalization(self, obj, curr_time): 
-        self.pose_dict.update({f'{obj.robot_id}.{curr_time}': obj.pose})
-        # self.current_transforms[obj.robot_id].update({obj.robot_id_to: obj.colocalization})
-
     def detect_inter_robot_associations(self): 
         '''Detect inter-robot object associations: runs every self.params['sort.re_cluster_secs'] 
         seconds from associations_ros_driver.py
@@ -246,9 +236,7 @@ class ObjectAssociation(object):
         
         for key in parent_keys_lst: 
             robot_id = int(key.split(".", 1)[0])
-            # print(f"robot_id: {robot_id}\tcurr_neighbors_in_range_set: {curr_neighbors_in_range_set}")
-            # print(f"robot_id in curr_neighbors_in_range_set: {robot_id in curr_neighbors_in_range_set}")
-            # print(f"len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1: {len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1}")
+
             if (robot_id in curr_neighbors_in_range_set and 
                 len(self.unified.obj_desc[key].children) < self.params['max_nb_robots'] - 1): 
                 abbreviated[robot_id].append(key)
@@ -267,7 +255,7 @@ class ObjectAssociation(object):
                 if j_info.time > latest_msg_time: 
                     latest_msg_time = j_info.time
 
-                # One place where the ordered dict by insertion part comes from
+                # One place where the ordered dict by insertion part is necessary
                 if j_info.time < self.last_time_clustered: 
                     break
                 
@@ -277,9 +265,7 @@ class ObjectAssociation(object):
 
                     if k_info.time > latest_msg_time: 
                         latest_msg_time = k_info.time
-                        
-                    # print(f"j: {j_info.robot_id}.{j_info.time}\tk: {k_info.robot_id}.{k_info.time}")
-                    
+                                            
                     # Assuming each class is very different from each other class, don't cluster if detected as a 
                     # different class
                     if j_info.robot_id == k_info.robot_id or j_info.class_id != k_info.class_id: 
@@ -338,16 +324,7 @@ class ObjectAssociation(object):
             r0_obj_loc = np.array([r0_x, r0_y, r0_z])
             
             print(r0_obj_loc)
-            
-            # Object pose
-            # r0_then_pose.position.x += r0_loc_trans.x
-            # r0_then_pose.position.y += r0_loc_trans.y
-            # r0_then_pose.position.z += r0_loc_trans.z
-            
-            # r0_obj_loc = np.array([r0_then_pose.position.x, r0_then_pose.position.y, r0_then_pose.position.z])
-            
-            # print(f"A_now_pose: {A_now_pose.position}\nA_then_pose: {r0_then_pose}\nObject pose: {r0_obj_loc}")
-            
+                        
         except Exception as e: 
             print(f"Exception with transformation: {e}")
 
@@ -359,19 +336,19 @@ class ObjectAssociation(object):
         NOTE: won't scale if A is not present in range
         '''
         try: 
-            A_now_pose = self.pose_dict[f'0.{self.last_time_agent_entered[0]}']
-            A_now_time = self.last_time_agent_entered[0]
+            broker_now_pose = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[0]}']
+            broker_now_time = self.last_time_agent_entered[self.params['robot_id']]
             
             r0_sec = math.floor(r0_time)
             r0_ns = r0_time - r0_sec
             r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
             
-            A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
+            broker_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
                 r0_frame_id, r0_when, 
-                "A_odom", A_now_time, 
+                self.frame_ids[self.params['robot_id']], broker_now_time, 
                 "world", Duration(seconds=0.05)).transform
             
-            r0_then_pose = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
+            r0_then_pose = self.apply_pose_transformation(broker_now_to_r0_frame_then, broker_now_pose)
 
             r0_loc = Vector3(x=r0_x, y=r0_y, z=r0_z)
             # r0_loc = Vector3(x=r0_dist * math.sin(r0_pitch) * math.cos(r0_yaw), 
@@ -394,12 +371,12 @@ class ObjectAssociation(object):
             r1_ns = r1_time - r1_sec
             r1_when = Time(seconds=r1_sec, nanoseconds=r1_ns)
             
-            A_now_to_r1_frame_then = self.tf_buffer.lookup_transform_full(
+            broker_now_to_r1_frame_then = self.tf_buffer.lookup_transform_full(
                 r1_frame_id, r1_when, 
-                "A_odom", A_now_time, 
+                self.frame_ids[self.params['robot_id']], broker_now_time, 
                 "world", Duration(seconds=0.05)).transform
             
-            r1_then_pose = self.apply_pose_transformation(A_now_to_r1_frame_then, A_now_pose)
+            r1_then_pose = self.apply_pose_transformation(broker_now_to_r1_frame_then, broker_now_pose)
 
             r1_loc = Vector3(x=r1_x, y=r1_y, z=r1_z)
             # r1_loc = Vector3(x=r1_dist * math.sin(r1_pitch) * math.cos(r1_yaw), 
@@ -447,85 +424,7 @@ class ObjectAssociation(object):
         new_pose.orientation = Quaternion(x=new_quat.x, y=new_quat.y, z=new_quat.z, w=new_quat.w)
         
         return new_pose
-        
-    # # r0 will have a lower robot_id than r1
-    # # I think this works but isn't necessary (I use lookup_transform_full instead)
-    # def get_colocalize_transform(self, r0_frame_id, r0_id, r0_time, r1_frame_id, r1_id, r1_time): 
-    #     '''Get transformation between the frames of two different agents at two different times, using 
-    #     information on agent pose over time and current colocalization: from r0_then to r1_then\n
-    #     Eg: use dictionary for r0_(t-3) to r0_t, current colocalization to convert from r0_t to r1_t, 
-    #     and dictionary from r1_t to r1_(t-5)
-    #     '''
-    #     try: 
-    #         # TODO test this - need to construct "world" fixed frame first
-    #         # r0_sec = math.floor(r0_time)
-    #         # r0_ns = r0_time - r0_sec
-    #         # r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
-            
-    #         # r1_sec = math.floor(r1_time)
-    #         # r1_ns = r1_time - r1_sec
-    #         # r1_when = Time(seconds=r1_sec, nanoseconds=r1_ns)
-            
-    #         # full_transform = self.tf_buffer.lookup_transform_full(
-    #         #     r1_frame_id, r1_when, 
-    #         #     r0_frame_id, r0_when, 
-    #         #     "world", Duration(seconds=0.05))
-            
-            
-            
-    #         curr_transform = self.tf_buffer.lookup_transform(r1_frame_id, r0_frame_id, rclpy.time.Time())
-            
-    #         a_pose_then = self.pose_dict[f'{r0_id}.{r0_time}']
-    #         b_pose_then = self.pose_dict[f'{r1_id}.{r1_time}']
-            
-    #         a_pose_now = self.pose_dict[f'{r0_id}.{self.last_time_agent_entered[r0_id]}']
-    #         b_pose_now = self.pose_dict[f'{r1_id}.{self.last_time_agent_entered[r1_id]}']
-            
-    #         translation=Vector3(
-    #             x=(a_pose_now.position.x - a_pose_then.position.x + 
-    #                curr_transform.transform.translation.x + b_pose_then.position.x - 
-    #                b_pose_now.position.x),
-    #             y=(a_pose_now.position.y - a_pose_then.position.y + 
-    #                curr_transform.transform.translation.y + b_pose_then.position.y - 
-    #                b_pose_now.position.y),
-    #             z=(a_pose_now.position.z - a_pose_then.position.z + 
-    #                curr_transform.transform.translation.z + b_pose_then.position.z - 
-    #                b_pose_now.position.z)
-    #         )
-            
-    #         transform_quat_ros = curr_transform.transform.rotation
-    #         transform_quat = R.from_quat([transform_quat_ros.x, transform_quat_ros.y, transform_quat_ros.z, transform_quat_ros.w])
-
-    #         # TODO figure out quaternions here
-    #         a_quat_ros_then = a_pose_then.orientation
-    #         a_quat_then = R.from_quat([a_quat_ros_then.x, a_quat_ros_then.y, a_quat_ros_then.z, a_quat_ros_then.w])
-
-    #         a_quat_ros_now = a_pose_now.orientation
-    #         a_quat_now = R.from_quat([a_quat_ros_now.x, a_quat_ros_now.y, a_quat_ros_now.z, a_quat_ros_now.w])
-
-    #         # Rot from a_then to a_now: then.inv() * now
-    #         # Verification: then * then_to_now = now
-    #         # Note: for all quaternions q, q = -q
-    #         a_quat_then_to_now = a_quat_then.inv() * a_quat_now
-            
-    #         b_quat_ros_then = b_pose_then.orientation
-    #         b_quat_then = R.from_quat([b_quat_ros_then.x, b_quat_ros_then.y, b_quat_ros_then.z, b_quat_ros_then.w])
-
-    #         b_quat_ros_now = b_pose_now.orientation
-    #         b_quat_now = R.from_quat([b_quat_ros_now.x, b_quat_ros_now.y, b_quat_ros_now.z, b_quat_ros_now.w])
-
-    #         # Rot from b_now to b_then: now.inv() * then
-    #         b_quat_now_to_then = b_quat_now.inv() * b_quat_then
-            
-    #         final_rot = a_quat_then_to_now * transform_quat * b_quat_now_to_then
-    #         final_quat = final_rot.as_quat()
-    #         final_quat_ros = Quaternion(x=final_quat[0], y=final_quat[1], z=final_quat[2], w=final_quat[3])
-            
-    #         return Transform(translation=translation, rotation=final_quat_ros)
-            
-    #     except Exception as e: 
-    #         print(f"Exception with colocalization transformation: {e}")
-        
+                
     def check_features(self, r0_descriptor, r1_descriptor): 
         '''Get cosine similarity between the two descriptors
         '''

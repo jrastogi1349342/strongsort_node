@@ -6,7 +6,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped
-from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, LastSeenDetection, UnifiedObjectIDs
+from strongsort_msgs.msg import MOTGlobalDescriptor, MOTGlobalDescriptors, UnifiedObjectIDs
 from tf2_ros import TransformBroadcaster
 import math
 from scipy.spatial.transform import Rotation as R
@@ -76,23 +76,7 @@ class StrongSortPublisher(object):
         # last 0.1 seconds 
         # NOTE: will not send to agents out of range 
         self.last_seen_det_clock = self.node.create_timer(0.1, self.last_seen_callback, clock=Clock())
-        
-        # self.latest_det_dict = [-1] * self.params['max_nb_robots']
-        
-        # self.global_desc_req_pub = self.node.create_publisher(
-        #     LastSeenDetection, 
-        #     f"/{self.params['name_space']}{self.params['video_topic']}/last", 
-        #     10)
-        
-        # Subscribes to LastSeenDetection messages for highest non-unified object ID of current agent, 
-        # and sends that robot a MOTGlobalDescriptors msg containing info on all non-unified object IDs 
-        # (i.e. msg.obj_id for a given robot_id > latest_det_dict[msg.robot_id])
-        # self.latest_class_sub = self.node.create_subscription(
-        #     LastSeenDetection, 
-        #     f"/{self.params['name_space']}{self.params['video_topic']}/last", 
-        #     self.latest_det_callback, 
-        #     10)
-        
+                
         # Sends all descriptors with non-unified IDs to the other robot in callback of self.latest_class_sub
         # subscriber (i.e. new info found)
         self.mot_pub = self.node.create_publisher(
@@ -452,7 +436,6 @@ class StrongSortPublisher(object):
             # Stream results
             if self.params['show_video']:
                 cv2.imshow(str(p), im0)
-                # cv2.imshow("Disparity", disparity)
                 cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
@@ -473,38 +456,13 @@ class StrongSortPublisher(object):
 
             self.prev_frames[i] = self.curr_frames[i]
             
-        # # TODO remove after more thorough testing
-        # self.mot_pub.publish(MOTGlobalDescriptors(
-        #     header=Header(
-        #         stamp=self.node.get_clock().now().to_msg(), 
-        #         frame_id=img_msg.header.frame_id
-        #         ), 
-        #     descriptors=list(self.results_dict.values())))
-            
-
     def last_seen_callback(self): 
         stamp = self.node.get_clock().now().to_msg()
         self.mot_pub.publish(MOTGlobalDescriptors(
             header=Header(stamp=stamp), 
             descriptors=list(self.results_dict.values())))
         
-        # self.last_sent_detections_time = stamp.sec + (stamp.nanosec / 1000000000)
-        self.results_dict.clear()
-            
-        
-        
-        # for id in range(len(self.latest_det_dict)):
-        #     # if id != self.params['robot_id']: 
-        #     self.global_desc_req_pub.publish(LastSeenDetection(robot_id=id, last_obj_id=self.latest_det_dict[id]))
-    
-    
-    # def latest_det_callback(self, msg): 
-    #     if msg.robot_id == self.params['robot_id']: 
-    #         abbrev_descriptor_dict = dict(filter(lambda x: x[0] > msg.last_obj_id, self.results_dict.items()))
-    #         self.mot_pub.publish(MOTGlobalDescriptors(
-    #             header=Header(stamp=self.node.get_clock().now().to_msg()), 
-    #             descriptors=list(abbrev_descriptor_dict.values())))
-        
+        self.results_dict.clear()        
         
     def broadcast_transform_callback(self): 
         '''Send callback relating transform from agent 1 to agent 2 
