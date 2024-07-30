@@ -24,7 +24,9 @@ class AssociationsROSDriver(Node):
                         ('max_nb_robots', 3),
                         ('sort.max_occlusion_time', 20), # seconds
                         ('sort.compact_desc_min_similarity', 0.6), # minimum similarity value between two compact descriptors
-                        ('sort.location_epsilon', 0.8), # maximum difference between two locations 
+                        ('sort.location_dist_metric', "bhattacharyya"), # choose dist metric
+                        ('sort.bhattacharyya_location_epsilon', 5), # maximum dist between two locations, using Bhattacharyya bound
+                        ('sort.euclidean_location_epsilon', 0.8), # maximum dist between two locations, using euclidean distance
                         ('sort.re_cluster_secs', 8.0), # number of seconds to wait before re-clustering associations
                         ('neighbor_management.enable_neighbor_monitoring', True),
                         ('neighbor_management.init_delay_sec', 5.0), 
@@ -40,8 +42,12 @@ class AssociationsROSDriver(Node):
             'sort.max_occlusion_time').value
         self.params['sort.compact_desc_min_similarity'] = self.get_parameter(
             'sort.compact_desc_min_similarity').value
-        self.params['sort.location_epsilon'] = self.get_parameter(
-            'sort.location_epsilon').value
+        self.params['sort.location_dist_metric'] = self.get_parameter(
+            'sort.location_dist_metric').value
+        self.params['sort.bhattacharyya_location_epsilon'] = self.get_parameter(
+            'sort.bhattacharyya_location_epsilon').value
+        self.params['sort.euclidean_location_epsilon'] = self.get_parameter(
+            'sort.euclidean_location_epsilon').value
         self.params['sort.re_cluster_secs'] = self.get_parameter(
             'sort.re_cluster_secs').value
         self.params['neighbor_management.enable_neighbor_monitoring'] = self.get_parameter(

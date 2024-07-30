@@ -4,13 +4,10 @@ import math
 
 class ObjectDescription(): 
     # Future work: replace dist value with probability distribution (ie mean, variance)             
-    def __init__(self, frame_id, dist, pitch, yaw, curr_conf, time, 
+    def __init__(self, frame_id, rel_x, rel_y, rel_z, curr_conf, time, 
                  robot_id, descriptor_conf, feature_desc, class_id, 
                  obj_id, children): 
         self.frame_id = frame_id
-        self.dist = dist # phi
-        self.pitch = pitch # rho
-        self.yaw = yaw # theta
         self.curr_conf = curr_conf # latest confidence of detection
         self.time = time # value: stamp.sec + stamp.nanosec
         self.robot_id = robot_id
@@ -19,12 +16,8 @@ class ObjectDescription():
         self.class_id = class_id
         self.obj_id = obj_id
         self.children = children
-        
-        x = dist * math.sin(pitch) * math.cos(yaw)
-        y = dist * math.sin(pitch) * math.sin(yaw)
-        z = dist * math.cos(pitch)
-        
-        self.kalman_filter = ConfidenceBasedKalmanFilter(robot_id, x, y, z, time)
+                
+        self.kalman_filter = ConfidenceBasedKalmanFilter(robot_id, rel_x, rel_y, rel_z, time)
         
     def get_time(self): 
         return self.time

@@ -128,3 +128,23 @@ class ConfidenceBasedKalmanFilter():
     def change_state_broker(self, new_broker_id, x_new, y_new, z_new): 
         self.broker_id = new_broker_id
         self.kf.x = np.array([x_new, y_new, z_new, 0.0, 0.0, 0.0])
+
+# self is distribution 1, inputted mean and cov are distribution 2
+def gaussian_bhattacharyya(r0_mean, r0_cov, r1_mean, r1_cov, pose_only): 
+    if pose_only: 
+        r0_mean, r0_cov = r0_mean[:3], r0_cov[:3, :3]
+        r1_mean, r1_cov = r1_mean[:3], r1_cov[:3, :3]
+
+    mean_diff = r0_mean - r1_mean
+
+    avg_cov = (r0_cov + r1_cov) / 2
+    
+    first_term = np.linalg.multi_dot((mean_diff, np.linalg.inv(avg_cov), mean_diff.T)) / 8.0
+    
+    det_avg = np.linalg.det(avg_cov)
+    det_one = np.linalg.det(r0_cov)
+    det_two = np.linalg.det(r1_cov)
+    
+    sec_term = math.log(det_avg / math.sqrt(det_one * det_two)) / 2
+    
+    return first_term + sec_term

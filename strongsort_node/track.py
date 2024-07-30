@@ -326,6 +326,11 @@ class StrongSortPublisher(object):
                         pitch_to_obj = 67 * (320 - ((tlw + brw) / 2)) / 320
                         yaw_to_obj = 34 * (((tlh + brh) / 2) - 240) / 240
                         median_depth_val = self.depth_median(depth, tlw, tlh, brw, brh)
+                        
+                        x = median_depth_val * math.sin(pitch_to_obj) * math.cos(yaw_to_obj)
+                        y = median_depth_val * math.sin(pitch_to_obj) * math.sin(yaw_to_obj)
+                        z = median_depth_val * math.cos(pitch_to_obj)
+
                         # print(f"Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
                         
                         # TODO test this
@@ -334,30 +339,6 @@ class StrongSortPublisher(object):
                         # print(f"Angles: {overall_angles_to_obj}")
                         # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
 
-                        # ID 0 is on the left of ID 1
-                        # TODO test this
-                        colocalization = TransformStamped(
-                            header=Header(
-                                stamp=self.node.get_clock().now().to_msg(), 
-                                frame_id=img_msg.header.frame_id # this doesn't change
-                            ))
-                        quat = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-                        quat_scipy = R.from_quat([0.0, 0.0, 0.0, 1.0])
-                        quat_scipy_inv = quat_scipy.inv().as_quat()
-                        quat_inv = Quaternion(x=quat_scipy_inv[0], y=quat_scipy_inv[1], z=quat_scipy_inv[2], w=quat_scipy_inv[3])
-                        if self.params['robot_id'] == 0: 
-                            colocalization.child_frame_id = "B_odom"
-                            colocalization.transform = Transform(
-                                translation=Vector3(x=1.0, y=0.0, z=0.0), # meters?
-                                rotation=quat
-                            )
-                        else: 
-                            colocalization.child_frame_id = "A_odom"
-                            colocalization.transform = Transform(
-                                translation=Vector3(x=-1.0, y=0.0, z=0.0), # meters?
-                                rotation=quat_inv
-                            )
-
                         if id in self.results_dict: 
                             old_info = self.results_dict[id]
                             
@@ -365,26 +346,20 @@ class StrongSortPublisher(object):
                             self.results_dict[id].header.stamp = self.node.get_clock().now().to_msg()
                             self.results_dict[id].keyframe_id = 0 # msg.keyframe_id, change 
                             self.results_dict[id].curr_confidence = conf
-                            self.results_dict[id].pitch = pitch_to_obj
-                            self.results_dict[id].yaw = yaw_to_obj
-                            # self.results_dict[id].angle_x = overall_angles_to_obj[0]
-                            # self.results_dict[id].angle_y = overall_angles_to_obj[1]
-                            # self.results_dict[id].angle_z = overall_angles_to_obj[2]
-                            self.results_dict[id].distance = median_depth_val
+                            self.results_dict[id].rel_x = x
+                            self.results_dict[id].rel_y = y
+                            self.results_dict[id].rel_z = z
                             self.results_dict[id].pose = odom_msg.pose.pose
-                            self.results_dict[id].colocalization = colocalization
                             
                             # Feature descriptor should have highest confidence
                             if conf > old_info.max_confidence: 
                                 cropped = im0[tlw:brw, tlh:brh]
                                 new_embedding = self.cosplace_desc.compute_embedding(cropped)
-                                # print(f"Embedding for existing obj: {new_embedding}")
                                 self.results_dict[id].max_confidence = conf
                                 self.results_dict[id].best_descriptor = [float(x) for x in new_embedding]
                         else: 
                             cropped = im0[tlw:brw, tlh:brh]
                             new_embedding = self.cosplace_desc.compute_embedding(cropped)
-                            # print(f"Embedding for new obj: {new_embedding}")
                             self.results_dict[id] = MOTGlobalDescriptor(
                                 header=Header(
                                     stamp=self.node.get_clock().now().to_msg(), 
@@ -398,14 +373,10 @@ class StrongSortPublisher(object):
                                 max_confidence=conf,
                                 best_descriptor=new_embedding,
                                 curr_confidence=conf, 
-                                pitch=pitch_to_obj, 
-                                yaw=yaw_to_obj,
-                                # angle_x=overall_angles_to_obj[0], 
-                                # angle_y=overall_angles_to_obj[1], 
-                                # angle_z=overall_angles_to_obj[2], 
-                                distance=median_depth_val, 
-                                pose=odom_msg.pose.pose,
-                                colocalization = colocalization
+                                rel_x=x, 
+                                rel_y=y,
+                                rel_z=z, 
+                                pose=odom_msg.pose.pose
                             )
                             
                         self.unified_id_mapping.update({id: id})

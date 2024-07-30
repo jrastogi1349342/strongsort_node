@@ -12,6 +12,7 @@ from geometry_msgs.msg import Vector3, Quaternion, Transform, TransformStamped, 
 from strongsort_msgs.msg import MOTGlobalDescriptors, UnifiedObjectIDs
 from strongsort_node.neighbors_manager import NeighborManager
 from strongsort_node.disjoint_set_associations import DisjointSetAssociations
+from strongsort_node.conf_kalman_filter import gaussian_bhattacharyya
 
 import math
 import heapq
@@ -120,10 +121,6 @@ class ObjectAssociation(object):
         '''
         obj_desc = self.unified.obj_desc[parent_key]
         obj_desc.time = curr_time
-        # Unnecessary step, TODO remove these three parameters and just pass directly to filter
-        obj_desc.dist = obj.distance
-        obj_desc.pitch = obj.pitch
-        obj_desc.yaw = obj.yaw
                 
         if obj.max_confidence > obj_desc.descriptor_conf: 
             obj_desc.descriptor_conf = obj.max_confidence
@@ -131,12 +128,10 @@ class ObjectAssociation(object):
             
         obj_desc.kalman_filter.last_updated_time = curr_time
             
-        self.full_kf(obj, dt)
+        self.full_kf(obj, dt, obj.rel_x, obj.rel_y, obj.rel_z)
                 
     # TODO debug
-    # Collectively decrease confidence in object location at once for old detections/use the fact that confidence isn't 
-    # the highest to update kf in some other way
-    def full_kf(self, obj, dt):
+    def full_kf(self, obj, dt, new_x, new_y, new_z):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
         NOTE: this implementation is unstable in cases where the lowest ID in range changes dynamically, and 
@@ -155,9 +150,7 @@ class ObjectAssociation(object):
             if kf.broker_id == self.params['robot_id']: 
                 now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                 
-                loc = Vector3(x=obj.dist * math.sin(obj.pitch) * math.cos(obj.yaw), 
-                        y=obj.dist * math.sin(obj.pitch) * math.sin(obj.yaw), 
-                        z=obj.dist * math.cos(obj.pitch))
+                loc = Vector3(x=new_x, y=new_y, z=new_z)
                 
                 loc_trans = do_transform_vector3(loc, now_pose)
                 
@@ -181,9 +174,7 @@ class ObjectAssociation(object):
                 
                 other_then_pose = self.apply_pose_transformation(broker_now_to_other_frame_then, broker_now_pose)
 
-                loc = Vector3(x=obj.dist * math.sin(obj.pitch) * math.cos(obj.yaw), 
-                        y=obj.dist * math.sin(obj.pitch) * math.sin(obj.yaw), 
-                        z=obj.dist * math.cos(obj.pitch))
+                loc = Vector3(x=new_x, y=new_y, z=new_z)
                 
                 loc_trans = do_transform_vector3(loc, other_then_pose)
                 
@@ -225,7 +216,7 @@ class ObjectAssociation(object):
         first_key_info = self.unified.obj_desc[first_key]
         
         self.single_agent_location_test(self, first_key_info.time, first_key_info.frame_id, 
-                                        first_key_info.dist, first_key_info.pitch, first_key_info.yaw)
+                                        first_key_info.kalman_filter)
 
     def cluster(self, curr_neighbors_in_range_set): 
         ''' Clusters all info of current neighbors in list
@@ -282,9 +273,9 @@ class ObjectAssociation(object):
                     # r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
                     # r1_id, r1_time, r1_dist, r1_pitch, r1_yaw
                     check_odom = self.check_same_location(j_info.frame_id, j_info.robot_id, j_info.time, 
-                                                          j_info.dist, j_info.pitch, j_info.yaw, 
+                                                          j_info.kalman_filter, 
                                                           k_info.frame_id, k_info.robot_id, k_info.time, 
-                                                          k_info.dist, k_info.pitch, k_info.yaw)
+                                                          k_info.kalman_filter)
                     
                     # Temp removed to test feature description + union - TODO re-add
                     print(f"Check odom: {check_odom}")
@@ -303,7 +294,7 @@ class ObjectAssociation(object):
 
         self.last_time_clustered = latest_msg_time
         
-    def single_agent_location_test(self, r0_time, r0_frame_id, r0_dist, r0_pitch, r0_yaw): 
+    def single_agent_location_test(self, r0_time, r0_frame_id, kf): 
         try: 
             A_now_pose = self.pose_dict[f'0.{self.last_time_agent_entered[0]}']
             A_now_time = self.last_time_agent_entered[0]
@@ -319,9 +310,7 @@ class ObjectAssociation(object):
             
             r0_then_pose = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
 
-            r0_loc = Vector3(x=r0_dist * math.sin(r0_pitch) * math.cos(r0_yaw), 
-                      y=r0_dist * math.sin(r0_pitch) * math.sin(r0_yaw), 
-                      z=r0_dist * math.cos(r0_pitch))
+            r0_loc = Vector3(x=kf.x[0], y=kf.x[1], z=kf.x[2])
             
             r0_loc_trans = do_transform_vector3(r0_loc, r0_then_pose)
             
@@ -337,8 +326,9 @@ class ObjectAssociation(object):
             print(f"Exception with transformation: {e}")
 
 
-    def check_same_location(self, r0_frame_id, r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, r0_x, r0_y, r0_z, 
-                            r1_frame_id, r1_id, r1_time, r1_dist, r1_pitch, r1_yaw, r1_x, r1_y, r1_z): 
+    def check_same_location(self, 
+                            r0_frame_id, r0_id, r0_time, r0_kf, 
+                            r1_frame_id, r1_id, r1_time, r1_kf): 
         '''Check if location of object is same between two robots and two timestamps\n
         Convention is that translations are applied before rotations in Transform messages\n
         NOTE: won't scale if A is not present in range
@@ -358,10 +348,7 @@ class ObjectAssociation(object):
             
             r0_then_pose = self.apply_pose_transformation(broker_now_to_r0_frame_then, broker_now_pose)
 
-            r0_loc = Vector3(x=r0_x, y=r0_y, z=r0_z)
-            # r0_loc = Vector3(x=r0_dist * math.sin(r0_pitch) * math.cos(r0_yaw), 
-            #           y=r0_dist * math.sin(r0_pitch) * math.sin(r0_yaw), 
-            #           z=r0_dist * math.cos(r0_pitch))
+            r0_loc = Vector3(x=r0_kf.x[0], y=r0_kf.x[1], z=r0_kf.x[2])
             
             r0_loc_trans = do_transform_vector3(r0_loc, r0_then_pose)
             
@@ -371,6 +358,7 @@ class ObjectAssociation(object):
             r0_z = r0_then_pose.position.z + r0_loc_trans.z
             
             r0_obj_loc = np.array([r0_x, r0_y, r0_z])
+            r0_cov = r0_kf.P[:3, :3]
             
             # --------------r1-----------------
 
@@ -386,10 +374,7 @@ class ObjectAssociation(object):
             
             r1_then_pose = self.apply_pose_transformation(broker_now_to_r1_frame_then, broker_now_pose)
 
-            r1_loc = Vector3(x=r1_x, y=r1_y, z=r1_z)
-            # r1_loc = Vector3(x=r1_dist * math.sin(r1_pitch) * math.cos(r1_yaw), 
-            #           y=r1_dist * math.sin(r1_pitch) * math.sin(r1_yaw), 
-            #           z=r1_dist * math.cos(r1_pitch))
+            r1_loc = Vector3(x=r1_kf.x[0], y=r1_kf.x[1], z=r1_kf.x[2])
             
             r1_loc_trans = do_transform_vector3(r1_loc, r1_then_pose)
             
@@ -399,13 +384,25 @@ class ObjectAssociation(object):
             r1_z = r1_then_pose.position.z + r1_loc_trans.z
             
             r1_obj_loc = np.array([r1_x, r1_y, r1_z])
+            r1_cov = r1_kf.P[:3, :3]
+            
+            
+            is_valid = 0
+            if self.params['location_dist_metric'] == "bhattacharyya": 
+                dist = gaussian_bhattacharyya(r0_obj_loc, r0_cov, r1_obj_loc, r1_cov, True)
+                print(f"Distance between obj from r0 ({r0_obj_loc}) and 
+                    r1 ({r1_obj_loc}) using Bhattacharyya bound: {dist}")
+                is_valid = 1 if dist < self.params['sort.bhattacharyya_location_epsilon'] else 0
+            elif self.params['location_dist_metric'] == "euclidean":
+                dist = distance.euclidean(r0_obj_loc, r1_obj_loc)
+                print(f"Distance between obj from r0 ({r0_obj_loc}) and 
+                    r1 ({r1_obj_loc}) using Euclidean distance: {dist}")
+                is_valid = 1 if dist < self.params['sort.euclidean_location_epsilon'] else 0
+            else: 
+                raise Exception("""Location distance metric isn't recognized: 
+                                must be \'bhattacharyya\' or \'euclidean\'""")
 
-            
-            dist = distance.euclidean(r0_obj_loc, r1_obj_loc)
-            print(f"Distance between obj from r0 ({r0_obj_loc}) and 
-                  r1 ({r1_obj_loc}): {dist}")
-            
-            return dist < self.params['sort.location_epsilon']
+            return True if is_valid == 1 else False
 
 
         except Exception as e: 

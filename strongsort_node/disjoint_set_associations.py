@@ -18,9 +18,9 @@ class DisjointSetAssociations:
         self.parent.update({key: key})
         self.obj_desc.update({key: ObjectDescription(
             frame_id=obj.header.frame_id,
-            dist=obj.distance, 
-            pitch=obj.pitch, 
-            yaw=obj.yaw, 
+            rel_x=obj.rel_x, 
+            rel_y=obj.rel_y, 
+            rel_z=obj.rel_z, 
             curr_conf=obj.curr_confidence,
             time=curr_time, 
             robot_id=obj.robot_id, 
