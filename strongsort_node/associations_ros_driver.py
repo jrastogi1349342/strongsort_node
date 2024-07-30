@@ -31,7 +31,8 @@ class AssociationsROSDriver(Node):
                         ('neighbor_management.enable_neighbor_monitoring', True),
                         ('neighbor_management.init_delay_sec', 5.0), 
                         ('neighbor_management.max_heartbeat_delay_sec', 5.0), 
-                        ('neighbor_management.heartbeat_period_sec', 1.0)
+                        ('neighbor_management.heartbeat_period_sec', 1.0),
+                        ('neighbor_management.broker_assignment', "most_cpu")
                         ])
         self.params = {}
         
@@ -58,6 +59,8 @@ class AssociationsROSDriver(Node):
             'neighbor_management.max_heartbeat_delay_sec').value
         self.params['neighbor_management.heartbeat_period_sec'] = self.get_parameter(
             'neighbor_management.heartbeat_period_sec').value
+        self.params['neighbor_management.broker_assignment'] = self.get_parameter(
+            'neighbor_management.broker_assignment').value
 
         self.obj_association_driver = ObjectAssociation(
             self.params, self)

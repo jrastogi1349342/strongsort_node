@@ -1,6 +1,7 @@
 from strongsort_node.neighbor_monitor import NeighborMonitor
 # from cslam_common_interfaces.msg import RobotIdsAndOrigin
 from std_msgs.msg import String
+import psutil
 
 import rclpy
 
@@ -45,23 +46,36 @@ class NeighborManager():
                 is_robot_in_range[i] = False
         return is_robot_in_range, robots_in_range_list
 
-    # TODO figure out how to utilize gpu/ram/cpu
     def local_robot_is_broker(self):
         """This method check if the local robot (that runs this node), is the
-        default broker based on its current neighbors.
+        default broker based on its current neighbors.\n
+        The clustering process is primarily CPU-intensive, so I am using cpu percentages
 
         Returns:
             bool: is the local robot the default broker 
             among the robots in range
         """
         is_broker = True
+        max_cpu_percent = 100.0
         for i in range(self.max_nb_robots):
             if i != self.robot_id and self.neighbors_monitors[i].is_alive():
-                # Note: This is an arbitrary condition that selects the
-                # highest ID alive as broker. Could be change to any other cond.
-                # (e.g., selecting the robot with the most computing power)
-                if self.robot_id < i:
-                    is_broker = False
+                if self.params['neighbor_management.broker_assignment'] == "most_cpu": 
+                    curr_cpu = psutil.cpu_percent(interval=None)
+                    
+                    if max_cpu_percent < curr_cpu: 
+                        max_cpu_percent = curr_cpu
+                    else: 
+                        is_broker = False
+                elif self.params['neighbor_management.broker_assignment'] == "highest_id": 
+                    # Note: This is an arbitrary condition that selects the
+                    # highest ID alive as broker. Could be change to any other cond.
+                    # (e.g., selecting the robot with the most computing power)
+                    if self.robot_id < i:
+                        is_broker = False
+                else: 
+                    raise Exception("""neighbor_management.broker_assignment must be 
+                                    \'most_cpu\' or \'highest_id\'""")                    
+                
         return is_broker
 
     # def select_from_which_kf_to_send(self, latest_local_id):
