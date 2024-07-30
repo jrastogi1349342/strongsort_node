@@ -21,6 +21,7 @@ class DisjointSetAssociations:
             dist=obj.distance, 
             pitch=obj.pitch, 
             yaw=obj.yaw, 
+            curr_conf=obj.curr_confidence,
             time=curr_time, 
             robot_id=obj.robot_id, 
             descriptor_conf=obj.max_confidence,

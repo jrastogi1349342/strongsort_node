@@ -18,8 +18,6 @@ from tf2_ros import TransformBroadcaster
 from strongsort_node.track import StrongSortPublisher
 
 FILE = Path(__file__).resolve()
-# print("FILE:", FILE)
-# print("FILE Parents:", FILE.parents[0])
 ROOT = FILE.parents[0]  # yolov7 strongsort root directory
 WEIGHTS = ROOT / 'weights'
 

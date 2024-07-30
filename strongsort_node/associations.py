@@ -71,12 +71,14 @@ class ObjectAssociation(object):
             
             # num_parents_with_children = 0
             for obj in descriptor_msg.descriptors: 
+                dt = new_time - self.unified.obj_desc[obj].time
+
                 key = f'{obj.robot_id}.{obj.obj_id}'
                 parent = self.unified.find(key)
                 if parent == '': # Not in disjoint set
                     self.unified.insert(obj, key, new_time)
                 else: # In disjoint set somewhere 
-                    self.update_association_info(obj, parent, new_time)
+                    self.update_association_info(obj, parent, new_time, dt)
                     
                     # Perhaps fixed bug, figure out when using kalman filter
                     if parent in not_seen_clusters: 
@@ -93,9 +95,11 @@ class ObjectAssociation(object):
             if dt > self.params['sort.max_occlusion_time']: 
                 self.delete_association_tree(not_seen_keys)
                 
-            # TODO test this and debug
             else: 
-                self.apply_kf(self.unified.obj_desc[not_seen_keys], dt)
+                kf = self.unified.obj_desc[not_seen_keys].kalman_filter
+                kf_dt = new_time - kf.last_updated_time
+                kf.predict(kf_dt)
+                kf.last_updated_time = new_time
             
         print(f"Unified: {self.unified.get_all_clustered_keys()}")
 
@@ -110,10 +114,29 @@ class ObjectAssociation(object):
 
         self.unified.delete(parent)
         
+    def update_association_info(self, obj, parent_key, curr_time, dt): 
+        '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n
+        Update time, location
+        '''
+        obj_desc = self.unified.obj_desc[parent_key]
+        obj_desc.time = curr_time
+        # Unnecessary step, TODO remove these three parameters and just pass directly to filter
+        obj_desc.dist = obj.distance
+        obj_desc.pitch = obj.pitch
+        obj_desc.yaw = obj.yaw
+                
+        if obj.max_confidence > obj_desc.descriptor_conf: 
+            obj_desc.descriptor_conf = obj.max_confidence
+            obj_desc.feature_desc = list(obj.best_descriptor)
+            
+        obj_desc.kalman_filter.last_updated_time = curr_time
+            
+        self.full_kf(obj, dt)
+                
     # TODO debug
     # Collectively decrease confidence in object location at once for old detections/use the fact that confidence isn't 
     # the highest to update kf in some other way
-    def apply_kf(self, obj, dt):
+    def full_kf(self, obj, dt):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
         NOTE: this implementation is unstable in cases where the lowest ID in range changes dynamically, and 
@@ -125,6 +148,8 @@ class ObjectAssociation(object):
 
         if len(neighbors_in_range_list) > 1 and self.neighbor_manager.local_robot_is_broker():
             kf = obj.kalman_filter
+            
+            x = y = z = float('-inf')
 
             # Future work: include rotation info
             if kf.broker_id == self.params['robot_id']: 
@@ -141,10 +166,6 @@ class ObjectAssociation(object):
                 y = loc_trans.y + now_pose.position.y
                 z = loc_trans.z + now_pose.position.z
                 
-                measurement = np.array([x, y, z, 0.0, 0.0, 0.0])
-                kf.predict(dt)
-                kf.update(measurement)
-                                
             else: 
                 broker_now_pose = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[self.params['robot_id']]}']
                 broker_now_time = self.time_float_to_time(self.last_time_agent_entered[self.params['robot_id']])
@@ -170,29 +191,16 @@ class ObjectAssociation(object):
                 x = loc_trans.x + other_then_pose.position.x
                 y = loc_trans.y + other_then_pose.position.y
                 z = loc_trans.z + other_then_pose.position.z
+                                
+            measurement = np.array([x, y, z, 0.0, 0.0, 0.0])
+            kf.predict(dt)
+            kf.update(measurement, obj.curr_conf)
 
-                measurement = np.array([x, y, z, 0.0, 0.0, 0.0])
-                kf.predict(dt)
-                kf.update(measurement)
-                
     def time_float_to_time(self, val): 
         sec = math.floor(val)
         ns = val - sec
         return Time(seconds=sec, nanoseconds=ns)
-                
-    def update_association_info(self, obj, parent_key, curr_time): 
-        '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n
-        Update time, location
-        '''
-        self.unified.obj_desc[parent_key].time = curr_time
-        self.unified.obj_desc[parent_key].dist = obj.distance
-        self.unified.obj_desc[parent_key].pitch = obj.pitch
-        self.unified.obj_desc[parent_key].yaw = obj.yaw
-                
-        if obj.max_confidence > self.unified.obj_desc[parent_key].descriptor_conf: 
-            self.unified.obj_desc[parent_key].descriptor_conf = obj.max_confidence
-            self.unified.obj_desc[parent_key].feature_desc = list(obj.best_descriptor)
-            
+                            
     def detect_inter_robot_associations(self): 
         '''Detect inter-robot object associations: runs every self.params['sort.re_cluster_secs'] 
         seconds from associations_ros_driver.py

@@ -45,6 +45,7 @@ class NeighborManager():
                 is_robot_in_range[i] = False
         return is_robot_in_range, robots_in_range_list
 
+    # TODO figure out how to utilize gpu/ram/cpu
     def local_robot_is_broker(self):
         """This method check if the local robot (that runs this node), is the
         default broker based on its current neighbors.

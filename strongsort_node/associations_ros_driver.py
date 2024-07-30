@@ -66,12 +66,6 @@ class AssociationsROSDriver(Node):
             self.params['neighbor_management.heartbeat_period_sec'], 
             self.send_heartbeat, 
             clock=Clock())
-
-        # self.apply_kf_timer = self.create_timer(
-        #     self.params['sort.kalman_filter_secs'], 
-        #     self.obj_association_driver.apply_kf, 
-        #     clock=Clock()
-        # )
         
     def send_heartbeat(self): 
         self.heartbeat_publisher.publish(UInt32(data=self.params['robot_id']))
