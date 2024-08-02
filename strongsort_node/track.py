@@ -344,7 +344,7 @@ class StrongSortPublisher(object):
                             
                             # Localization info needs to be as recent as possible
                             self.results_dict[id].header.stamp = self.node.get_clock().now().to_msg()
-                            self.results_dict[id].keyframe_id = 0 # msg.keyframe_id, change 
+                            # self.results_dict[id].keyframe_id = 0 # msg.keyframe_id, change 
                             self.results_dict[id].curr_confidence = conf
                             self.results_dict[id].rel_x = x
                             self.results_dict[id].rel_y = y
@@ -366,8 +366,8 @@ class StrongSortPublisher(object):
                                     frame_id=img_msg.header.frame_id # this doesn't change
                                 ),
                                 robot_id=self.params['robot_id'], 
-                                robot_id_to=1, # change
-                                keyframe_id=0, # msg.keyframe_id
+                                # robot_id_to=1, # change
+                                # keyframe_id=0, # msg.keyframe_id
                                 obj_id=id, 
                                 obj_class_id=cls, 
                                 max_confidence=conf,

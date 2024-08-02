@@ -14,8 +14,8 @@ def launch_setup(context, *args, **kwargs):
             # connects to entry point in setup.py
             executable='track_ros_setup.py', 
             name='strongsort', 
-            output='screen',
-            emulate_tty=True, 
+            # output='screen',
+            # emulate_tty=True, 
             parameters=[
                 {
                     'video_topic': '/rm_vlc_leftfront/image', 
