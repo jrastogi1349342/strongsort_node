@@ -25,9 +25,9 @@ class AssociationsROSDriver(Node):
                         ('sort.max_occlusion_time', 20), # seconds
                         ('sort.compact_desc_min_similarity', 0.6), # minimum similarity value between two compact descriptors
                         ('sort.location_dist_metric', "bhattacharyya"), # choose dist metric
-                        ('sort.bhattacharyya_location_epsilon', 5), # maximum dist between two locations, using Bhattacharyya bound
+                        ('sort.bhattacharyya_location_epsilon', 0.25), # maximum dist between two locations, using Bhattacharyya bound
                         ('sort.euclidean_location_epsilon', 0.8), # maximum dist between two locations, using euclidean distance
-                        ('sort.re_cluster_secs', 8.0), # number of seconds to wait before re-clustering associations
+                        ('sort.re_cluster_secs', 2.0), # number of seconds to wait before re-clustering associations
                         ('neighbor_management.enable_neighbor_monitoring', True),
                         ('neighbor_management.init_delay_sec', 5.0), 
                         ('neighbor_management.max_heartbeat_delay_sec', 5.0), 

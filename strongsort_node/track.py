@@ -32,8 +32,6 @@ from PIL import Image as pil_image
 
 
 from strongsort_node.cosplace import CosPlace
-# TODO use this after integration into Nathan's repo
-# from cslam.cslam.vpr.cosplace import CosPlace 
 
 FILE = Path(__file__).resolve()
 # print("FILE:", FILE)
@@ -188,27 +186,7 @@ class StrongSortPublisher(object):
         brh = 450 if brh > 450 else brh
         
         return np.median(depth[tlw:brw, tlh:brh])
-    
-    def angle_to_object(self, odom_quat, pitch_degrees, yaw_degrees): 
-        pitch_rad = math.pi * pitch_degrees / 180
-        pitch_mtx = np.array([[math.cos(pitch_rad), 0, math.sin(pitch_rad)], 
-                             [0, 1, 0], 
-                             [-math.sin(pitch_rad), 0, math.cos(pitch_rad)]])
-    
-        yaw_rad = math.pi * yaw_degrees / 180
-        yaw_mtx = np.array([[math.cos(yaw_rad), -math.sin(yaw_rad), 0], 
-                             [math.sin(yaw_rad), math.cos(yaw_rad), 0], 
-                             [0, 0, 1]])
-        
-        obj_rot_mtx = R.from_matrix(yaw_mtx * pitch_mtx)
-        
-        odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
-        
-        # print(f"Obj rotation matrix: {obj_rot_mtx.as_euler('xyz', degrees=True)}\tOdom rotation matrix: {odom_rot_mtx.as_euler('xyz', degrees=True)}")
-        
-        combined_rot_mtx = obj_rot_mtx * odom_rot_mtx
-        return combined_rot_mtx.as_euler('xyz', degrees=True)
-        
+            
     # video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync
     @torch.no_grad()
     def video_callback(self, img_msg, depth_msg, cam_info, odom_msg): 
@@ -232,7 +210,7 @@ class StrongSortPublisher(object):
             im = torch.from_numpy(norm_expanded).to(0)
             
         else: 
-            return 
+            raise Exception("Camera type is not supported: must be \'gray\' or \'color\'")
         
         im = im.half() if self.params['half'] else im.float()  # uint8 to fp16/32
 
@@ -324,21 +302,23 @@ class StrongSortPublisher(object):
                               
                         # Negate pitch
                         pitch_to_obj = 67 * (320 - ((tlw + brw) / 2)) / 320
+                        pitch_rad = (math.pi / 2) - (math.pi * pitch_to_obj / 180)
+                        
                         yaw_to_obj = 34 * (((tlh + brh) / 2) - 240) / 240
+                        yaw_rad = math.pi * yaw_to_obj / 180
+
                         median_depth_val = self.depth_median(depth, tlw, tlh, brw, brh)
                         
-                        x = median_depth_val * math.sin(pitch_to_obj) * math.cos(yaw_to_obj)
-                        y = median_depth_val * math.sin(pitch_to_obj) * math.sin(yaw_to_obj)
-                        z = median_depth_val * math.cos(pitch_to_obj)
+                        # Designed to match with orientation of camera from tf2 tree
+                        # Positive z is right, y is down, x is inwards from camera perspective
+                        z = median_depth_val * math.sin(pitch_rad) * math.sin(yaw_rad)
+                        y = -median_depth_val * math.cos(pitch_rad)
+                        x = -median_depth_val * math.sin(pitch_rad) * math.cos(yaw_rad)
 
-                        # print(f"Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
+                        print(f"\n\nIn degrees: Pitch angle: {pitch_to_obj}\tYaw angle: {yaw_to_obj}\tDepth: {median_depth_val}")
+                        print(f"In radians: Pitch angle: {pitch_rad}\tYaw angle: {yaw_rad}\tDepth: {median_depth_val}")
+                        print(f"x: {x}\ty: {y}\tz: {z}")
                         
-                        # TODO test this
-                        # overall_angles_to_obj = self.angle_to_object(odom_msg.pose.pose.orientation, pitch_to_obj, yaw_to_obj)
-
-                        # print(f"Angles: {overall_angles_to_obj}")
-                        # disparity = cv2.rectangle(disparity, (tlh, tlw), (brh, brw), (255, 255, 255), 2)
-
                         if id in self.results_dict: 
                             old_info = self.results_dict[id]
                             

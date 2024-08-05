@@ -14,6 +14,8 @@ class DisjointSetAssociations:
         self.is_parent = {} # value: bool
 
     def insert(self, obj, key, curr_time): 
+        print(f"New insertion: \tx: {obj.rel_x}\ty: {obj.rel_y}\tz: {obj.rel_z}")
+
         self.rank.update({key: 1})
         self.parent.update({key: key})
         self.obj_desc.update({key: ObjectDescription(
@@ -76,7 +78,6 @@ class DisjointSetAssociations:
             self.parent[xset] = yset 
 
             self.obj_desc[yset].children.update({self.obj_desc[xset].robot_id: xset})
-            self.delete(xset)
             
             for child_id, child_key in self.obj_desc[xset].children.items():
                 self.obj_desc[yset].children.update({child_id: child_key})
@@ -84,12 +85,12 @@ class DisjointSetAssociations:
                 
             self.obj_desc[yset].time = self.obj_desc[yset].time if self.obj_desc[yset].time > self.obj_desc[xset].time else self.obj_desc[xset].time
             self.is_parent[xset] = False
+            self.delete(xset)
   
         elif self.rank[xset] > self.rank[yset]: 
             self.parent[yset] = xset 
 
             self.obj_desc[xset].children.update({self.obj_desc[yset].robot_id: yset})
-            self.delete(yset)
             
             for child_id, child_key in self.obj_desc[yset].children.items():
                 self.obj_desc[xset].children.update({child_id: child_key})
@@ -97,6 +98,7 @@ class DisjointSetAssociations:
                 
             self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
             self.is_parent[yset] = False
+            self.delete(yset)
   
         # If ranks are same, then move y under x (doesn't 
         # matter which one goes where) and increment rank of x's tree 
@@ -105,7 +107,6 @@ class DisjointSetAssociations:
             self.rank[xset] = self.rank[xset] + 1
             
             self.obj_desc[xset].children.update({self.obj_desc[yset].robot_id: yset})
-            self.delete(yset)
             
             for child_id, child_key in self.obj_desc[yset].children.items():
                 self.obj_desc[xset].children.update({child_id: child_key})
@@ -113,9 +114,10 @@ class DisjointSetAssociations:
 
             self.obj_desc[xset].time = self.obj_desc[xset].time if self.obj_desc[xset].time > self.obj_desc[yset].time else self.obj_desc[yset].time
             self.is_parent[yset] = False
+            self.delete(yset)
                 
     def delete(self, key): 
-        del self.rank[key], self.parent[key], self.obj_desc[key], self.is_parent[key]
+        del self.rank[key], self.obj_desc[key], self.is_parent[key]
         
     def get_parents_keys(self): 
         return [key for key, value in self.is_parent.items() if value]

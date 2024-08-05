@@ -18,8 +18,8 @@ import math
 import heapq
 import numpy as np
 from numpy.linalg import norm
-from scipy.spatial.transform import Rotation as R
-from sklearn.metrics.pairwise import cosine_similarity
+# from scipy.spatial.transform import Rotation as R
+# from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial import distance
 import traceback
 
@@ -97,9 +97,10 @@ class ObjectAssociation(object):
                 self.delete_association_tree(not_seen_keys)
                 
             else: 
+                # TODO revert comments and debug
                 kf = self.unified.obj_desc[not_seen_keys].kalman_filter
                 kf_dt = new_time - kf.last_updated_time
-                kf.predict(kf_dt)
+                # kf.predict(kf_dt)
                 kf.last_updated_time = new_time
             
         print(f"Unified: {self.unified.get_all_clustered_keys()}")
@@ -126,11 +127,18 @@ class ObjectAssociation(object):
             obj_desc.descriptor_conf = obj.max_confidence
             obj_desc.feature_desc = list(obj.best_descriptor)
             
+        # print(f"Updated position: \tx: {obj.rel_x}\ty: {obj.rel_y}\tz: {obj.rel_z}")
+            
         obj_desc.kalman_filter.last_updated_time = curr_time
             
-        self.full_kf(obj, dt, obj.rel_x, obj.rel_y, obj.rel_z)
+        obj_desc.kalman_filter.x[0] = obj.rel_x
+        obj_desc.kalman_filter.x[1] = obj.rel_y
+        obj_desc.kalman_filter.x[2] = obj.rel_z
+                    
+        # TODO remove above x, y, z assignment and debug this
+        # self.full_kf(obj, dt, obj.rel_x, obj.rel_y, obj.rel_z)
                 
-    # TODO debug
+    # TODO debug, and update to how check_same_location and single_agent_location_test are written
     def full_kf(self, obj, dt, new_x, new_y, new_z):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
@@ -138,15 +146,19 @@ class ObjectAssociation(object):
         may have some multithreading bugs between this and the clustering algorithm
         - obj: ObjectDescription object
         - dt: Change in time between last application of KF and now
+        - new_x: New x position of object, to update Kalman Filter
+        - new_y: New y position of object, to update Kalman Filter
+        - new_z: New z position of object, to update Kalman Filter
         ''' 
         _, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
+        
+        kf = obj.kalman_filter            
 
-        if len(neighbors_in_range_list) > 1 and self.neighbor_manager.local_robot_is_broker():
-            kf = obj.kalman_filter
-            
-            x = y = z = float('-inf')
+        if self.neighbor_manager.local_robot_is_broker():    
+            x = kf.x[0], y = kf.x[1], z = kf.x[2]
 
             # Future work: include rotation info
+            # In this case, there are >= 1 robots in range
             if kf.broker_id == self.params['robot_id']: 
                 now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                 
@@ -159,31 +171,28 @@ class ObjectAssociation(object):
                 y = loc_trans.y + now_pose.position.y
                 z = loc_trans.z + now_pose.position.z
                 
+            # If not this robot, then there are > 1 robots in range
             else: 
                 id = self.params['robot_id']
                 last_time_entered = self.last_time_agent_entered[id]
-                broker_now_pose = self.pose_dict[f"{id}.{last_time_entered}"]
                 broker_now_time = self.time_float_to_time(last_time_entered)
                 
-                # other_pose_then = self.pose_dict[f'{obj.robot_id}.{obj.time}']
                 other_now_time = self.time_float_to_time(obj.time)
 
                 # Create array mapping each agent ID to its frame_id, and access here as source frame
                 broker_now_to_other_frame_then = self.tf_buffer.lookup_transform_full(
+                    self.frame_ids[id], broker_now_time, 
                     obj.frame_id, other_now_time, 
-                    self.frame_ids[self.params['robot_id']], broker_now_time, 
-                    "world", Duration(seconds=0.05)).transform
+                    "world", Duration(seconds=0.05))
                 
-                other_then_pose = self.apply_pose_transformation(broker_now_to_other_frame_then, broker_now_pose)
-
                 loc = Vector3(x=new_x, y=new_y, z=new_z)
                 
-                loc_trans = do_transform_vector3(loc, other_then_pose)
+                loc_trans = do_transform_vector3(loc, broker_now_to_other_frame_then)
                 
                 # Object pose
-                x = loc_trans.x + other_then_pose.position.x
-                y = loc_trans.y + other_then_pose.position.y
-                z = loc_trans.z + other_then_pose.position.z
+                x = loc_trans.vector.x + broker_now_to_other_frame_then.transform.translation.x
+                y = loc_trans.vector.y + broker_now_to_other_frame_then.transform.translation.y
+                z = loc_trans.vector.z + broker_now_to_other_frame_then.transform.translation.z
                                 
             measurement = np.array([x, y, z, 0.0, 0.0, 0.0])
             kf.predict(dt)
@@ -199,7 +208,7 @@ class ObjectAssociation(object):
         seconds from associations_ros_driver.py
         '''
         
-        self.single_agent_tests()
+        # self.single_agent_tests()
         
         # neighbors_is_in_range: bool --> in range of any others?
         neighbors_is_in_range, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
@@ -275,11 +284,11 @@ class ObjectAssociation(object):
                     if j_info.robot_id == k_info.robot_id or j_info.class_id != k_info.class_id: 
                         continue
                     
-                    # r0_id, r0_time, r0_dist, r0_pitch, r0_yaw, 
-                    # r1_id, r1_time, r1_dist, r1_pitch, r1_yaw
-                    check_odom = self.check_same_location(j_info.frame_id, j_info.robot_id, j_info.time, 
+                    # r0_frame_id, r0_id, r0_time, r0_kalman_filter, 
+                    # r1_frame_id, r1_id, r1_time, r1_kalman_filter, 
+                    check_odom = self.check_same_location(j_info.frame_id, j_info.time, 
                                                           j_info.kalman_filter, 
-                                                          k_info.frame_id, k_info.robot_id, k_info.time, 
+                                                          k_info.frame_id, k_info.time, 
                                                           k_info.kalman_filter)
                     
                     # Temp removed to test feature description + union - TODO re-add
@@ -304,23 +313,19 @@ class ObjectAssociation(object):
             print(f"0 not detected?")
         else: 
             try: 
-                A_now_pose = self.pose_dict[f'0.{self.last_time_agent_entered[0]}']
-                # A_now_time = self.last_time_agent_entered[0]
                 A_now_time = self.time_float_to_time(self.last_time_agent_entered[0])
                 
                 r0_when = self.time_float_to_time(r0_time)
                 
                 A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
-                    r0_frame_id, r0_when, 
                     "A_odom", A_now_time, 
+                    r0_frame_id, r0_when, 
                     "world", Duration(seconds=0.05))
                 
                 print(f"A_now_to_r0_frame_then: {A_now_to_r0_frame_then}\n")
                 
-                # r0_then_transform = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
-                # print(f"r0_then_transform: {r0_then_transform}\n")
-
                 r0_loc = Vector3Stamped(vector=Vector3(x=kf.x[0], y=kf.x[1], z=kf.x[2]))
+                print(f"r0_loc: {r0_loc}\n")
                 
                 r0_loc_trans = do_transform_vector3(r0_loc, A_now_to_r0_frame_then)
                 print(f"r0_loc_trans: {r0_loc_trans}\n")
@@ -333,39 +338,15 @@ class ObjectAssociation(object):
                 
                 print(f"Location of object: {r0_obj_loc}\n\n")
 
-
-                # A_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
-                #     r0_frame_id, r0_when, 
-                #     "A_odom", A_now_time, 
-                #     "world", Duration(seconds=0.05)).transform
-                
-                # print(f"A_now_to_r0_frame_then: {A_now_to_r0_frame_then}\n")
-
-                # r0_then_transform = self.apply_pose_transformation(A_now_to_r0_frame_then, A_now_pose)
-                # print(f"r0_then_transform: {r0_then_transform}\n")
-
-                # r0_loc = Vector3Stamped(vector=Vector3(x=kf.x[0], y=kf.x[1], z=kf.x[2]))
-                
-                # r0_loc_trans = do_transform_vector3(r0_loc, r0_then_transform)
-                # print(f"r0_loc_trans: {r0_loc_trans}\n")
-                
-                # r0_x = r0_then_transform.transform.translation.x + r0_loc_trans.vector.x
-                # r0_y = r0_then_transform.transform.translation.y + r0_loc_trans.vector.y
-                # r0_z = r0_then_transform.transform.translation.z + r0_loc_trans.vector.z
-                
-                # r0_obj_loc = np.array([r0_x, r0_y, r0_z])
-                
-                # print(f"Location of object: {r0_obj_loc}\n\n")
-                            
             except Exception as e: 
                 print(f"Exception with transformation: {e}")
                 traceback.print_exc()
 
 
-
+    # Untested with blocking duration 0.5
     def check_same_location(self, 
-                            r0_frame_id, r0_id, r0_time, r0_kf, 
-                            r1_frame_id, r1_id, r1_time, r1_kf): 
+                            r0_frame_id, r0_time, r0_kf, 
+                            r1_frame_id, r1_time, r1_kf): 
         '''Check if location of object is same between two robots and two timestamps\n
         Convention is that translations are applied before rotations in Transform messages\n
         NOTE: won't scale if A is not present in range
@@ -373,32 +354,27 @@ class ObjectAssociation(object):
         try: 
             id = self.params['robot_id']
             last_time_entered = self.last_time_agent_entered[id]
-            broker_now_pose = self.pose_dict[f"{id}.{last_time_entered}"]
             broker_now_time = self.time_float_to_time(last_time_entered)
 
-            # broker_now_pose = self.pose_dict[f'{self.params['robot_id']}.{self.last_time_agent_entered[0]}']
-            # broker_now_time = self.last_time_agent_entered[self.params['robot_id']]
-            
             r0_when = self.time_float_to_time(r0_time)
-            # r0_sec = math.floor(r0_time)
-            # r0_ns = r0_time - r0_sec
-            # r0_when = Time(seconds=r0_sec, nanoseconds=r0_ns)
             
             broker_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
+                self.frame_ids[id], Time(0), # was broker_now_time
                 r0_frame_id, r0_when, 
-                self.frame_ids[self.params['robot_id']], broker_now_time, 
-                "world", Duration(seconds=0.05)).transform
+                "world", Duration(seconds=0.5))
             
-            r0_then_pose = self.apply_pose_transformation(broker_now_to_r0_frame_then, broker_now_pose)
+            print(f"broker_now_to_r0_frame_then: {broker_now_to_r0_frame_then}\n")
+            
+            r0_loc = Vector3Stamped(vector=Vector3(x=r0_kf.x[0], y=r0_kf.x[1], z=r0_kf.x[2]))
+            print(f"r0_loc: {r0_loc}\n")
 
-            r0_loc = Vector3(x=r0_kf.x[0], y=r0_kf.x[1], z=r0_kf.x[2])
-            
-            r0_loc_trans = do_transform_vector3(r0_loc, r0_then_pose)
-            
+            r0_loc_trans = do_transform_vector3(r0_loc, broker_now_to_r0_frame_then)
+            print(f"r0_loc_trans: {r0_loc_trans}\n")
+
             # Object pose
-            r0_x = r0_then_pose.position.x + r0_loc_trans.x
-            r0_y = r0_then_pose.position.y + r0_loc_trans.y
-            r0_z = r0_then_pose.position.z + r0_loc_trans.z
+            r0_x = broker_now_to_r0_frame_then.transform.translation.x + r0_loc_trans.vector.x
+            r0_y = broker_now_to_r0_frame_then.transform.translation.y + r0_loc_trans.vector.y
+            r0_z = broker_now_to_r0_frame_then.transform.translation.z + r0_loc_trans.vector.z
             
             r0_obj_loc = np.array([r0_x, r0_y, r0_z])
             r0_cov = r0_kf.P[:3, :3]
@@ -406,40 +382,44 @@ class ObjectAssociation(object):
             # --------------r1-----------------
 
             r1_when = self.time_float_to_time(r1_time)
-            # r1_sec = math.floor(r1_time)
-            # r1_ns = r1_time - r1_sec
-            # r1_when = Time(seconds=r1_sec, nanoseconds=r1_ns)
             
             broker_now_to_r1_frame_then = self.tf_buffer.lookup_transform_full(
+                self.frame_ids[id], Time(0), # was broker_now_time 
                 r1_frame_id, r1_when, 
-                self.frame_ids[self.params['robot_id']], broker_now_time, 
-                "world", Duration(seconds=0.05)).transform
+                "world", Duration(seconds=0.5))
             
-            r1_then_pose = self.apply_pose_transformation(broker_now_to_r1_frame_then, broker_now_pose)
+            print(f"broker_now_to_r1_frame_then: {broker_now_to_r1_frame_then}\n")
+            
 
-            r1_loc = Vector3(x=r1_kf.x[0], y=r1_kf.x[1], z=r1_kf.x[2])
-            
-            r1_loc_trans = do_transform_vector3(r1_loc, r1_then_pose)
-            
+            r1_loc = Vector3Stamped(vector=Vector3(x=r1_kf.x[0], y=r1_kf.x[1], z=r1_kf.x[2]))
+            print(f"r1_loc: {r1_loc}\n")
+
+            r1_loc_trans = do_transform_vector3(r1_loc, broker_now_to_r1_frame_then)
+            print(f"r1_loc_trans: {r1_loc_trans}\n")
+
             # Object pose
-            r1_x = r1_then_pose.position.x + r1_loc_trans.x
-            r1_y = r1_then_pose.position.y + r1_loc_trans.y
-            r1_z = r1_then_pose.position.z + r1_loc_trans.z
+            r1_x = broker_now_to_r1_frame_then.transform.translation.x + r1_loc_trans.vector.x
+            r1_y = broker_now_to_r1_frame_then.transform.translation.y + r1_loc_trans.vector.y
+            r1_z = broker_now_to_r1_frame_then.transform.translation.z + r1_loc_trans.vector.z
             
             r1_obj_loc = np.array([r1_x, r1_y, r1_z])
             r1_cov = r1_kf.P[:3, :3]
             
             
             is_valid = 0
-            if self.params['location_dist_metric'] == "bhattacharyya": 
+            if self.params['sort.location_dist_metric'] == "bhattacharyya": 
                 dist = gaussian_bhattacharyya(r0_obj_loc, r0_cov, r1_obj_loc, r1_cov, True)
+                
                 print(f"""Distance between obj from r0 ({r0_obj_loc}) and 
-                    r1 ({r1_obj_loc}) using Bhattacharyya bound: {dist}""")
+                    r1 ({r1_obj_loc}) using Bhattacharyya bound: {dist}\n\n\n""")
+                
                 is_valid = 1 if dist < self.params['sort.bhattacharyya_location_epsilon'] else 0
-            elif self.params['location_dist_metric'] == "euclidean":
+            elif self.params['sort.location_dist_metric'] == "euclidean":
                 dist = distance.euclidean(r0_obj_loc, r1_obj_loc)
+                
                 print(f"""Distance between obj from r0 ({r0_obj_loc}) and 
-                    r1 ({r1_obj_loc}) using Euclidean distance: {dist}""")
+                    r1 ({r1_obj_loc}) using Euclidean distance: {dist}\n\n\n""")
+                
                 is_valid = 1 if dist < self.params['sort.euclidean_location_epsilon'] else 0
             else: 
                 raise Exception("""Location distance metric isn't recognized: 
@@ -450,33 +430,11 @@ class ObjectAssociation(object):
 
         except Exception as e: 
             print(f"Exception with transformation: {e}")
-    
-    def apply_pose_transformation(self, transform, pose): 
-        '''Apply transform A -> B to pose A to get pose B, and convert pose B to transform from base frame to pose B
-        - transform: geometry_msgs/Transform message of A -> B
-        - pose: geometry_msgs/Pose message of A
-        '''
-        new_transform = TransformStamped()
-        
-        new_transform.transform.translation.x = pose.position.x + transform.translation.x
-        new_transform.transform.translation.y = pose.position.y + transform.translation.y
-        new_transform.transform.translation.z = pose.position.z + transform.translation.z
-        
-        trans_quat_ros = transform.rotation
-        trans_quat = R.from_quat([trans_quat_ros.x, trans_quat_ros.y, trans_quat_ros.z, trans_quat_ros.w])
-
-        pose_quat_ros = pose.orientation
-        pose_quat = R.from_quat([pose_quat_ros.x, pose_quat_ros.y, pose_quat_ros.z, pose_quat_ros.w])
-        
-        new_quat = (trans_quat * pose_quat).as_quat()
-        new_transform.transform.rotation = Quaternion(x=new_quat[0], y=new_quat[1], z=new_quat[2], w=new_quat[3])
-        
-        return new_transform
-                
+               
     def check_features(self, r0_descriptor, r1_descriptor): 
         '''Get cosine similarity between the two descriptors
         '''
-        sim = np.dot(r0_descriptor, r1_descriptor)/(norm(r0_descriptor) * norm(r1_descriptor))
+        sim = np.dot(r0_descriptor, r1_descriptor) / (norm(r0_descriptor) * norm(r1_descriptor))
         print(f'Similarity between r0 and r1: {sim}')
         
         return sim

@@ -22,7 +22,7 @@ def launch_setup(context, *args, **kwargs):
                     'name_space': LaunchConfiguration('name_space'), 
                     "robot_id": LaunchConfiguration('robot_id'), 
                     "max_nb_robots": LaunchConfiguration('max_nb_robots'), 
-                    "show_video": True
+                    "show_video": False
                  }
             ], 
         )
@@ -38,6 +38,8 @@ def launch_setup(context, *args, **kwargs):
                 'name_space': LaunchConfiguration('name_space'), 
                 "robot_id": LaunchConfiguration('robot_id'), 
                 "max_nb_robots": LaunchConfiguration('max_nb_robots'), 
+                "sort.location_dist_metric": "bhattacharyya",
+                "neighbor_management.broker_assignment": "highest_id"
             }
         ]
     )

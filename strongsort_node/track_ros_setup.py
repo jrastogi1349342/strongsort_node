@@ -190,7 +190,7 @@ class StrongSortSetup(Node):
         self.ts.registerCallback(self.mot_publishers.video_callback)
 
         # Timer to broadcast transform from A to B
-        self.A_to_B = self.create_timer(0.1, self.mot_publishers.broadcast_transform_callback, clock=Clock())
+        self.A_to_B = self.create_timer(0.025, self.mot_publishers.broadcast_transform_callback, clock=Clock())
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
