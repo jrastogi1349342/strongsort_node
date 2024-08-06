@@ -60,7 +60,8 @@ class ObjectAssociation(object):
         for id in range(self.params['max_nb_robots']): 
             self.unified_publishers_arr[id] = self.node.create_publisher(UnifiedObjectIDs, '/mot/unified', 10)
 
-    # Version 3
+    # TODO figure out how to deal with YOLO jitters (split second detections as a different class, 
+    # leading to having multiple clusters for the same object)
     def info_callback(self, descriptor_msg): 
         '''Callback for getting MOTGlobalDescriptors object from some robot
         - descriptor_msg: MOTGlobalDescriptors object; is from 1 unique robot ID 
@@ -136,15 +137,16 @@ class ObjectAssociation(object):
         obj_desc.kalman_filter.x[2] = obj.rel_z
                     
         # TODO remove above x, y, z assignment and debug this
-        # self.full_kf(obj, dt, obj.rel_x, obj.rel_y, obj.rel_z)
+        # self.full_kf(obj, parent_key, dt, obj.rel_x, obj.rel_y, obj.rel_z)
                 
     # TODO debug, and update to how check_same_location and single_agent_location_test are written
-    def full_kf(self, obj, dt, new_x, new_y, new_z):
+    def full_kf(self, obj, parent_key, dt, new_x, new_y, new_z):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
         NOTE: this implementation is unstable in cases where the lowest ID in range changes dynamically, and 
         may have some multithreading bugs between this and the clustering algorithm
         - obj: ObjectDescription object
+        - parent_key: Key of parent node in this cluster
         - dt: Change in time between last application of KF and now
         - new_x: New x position of object, to update Kalman Filter
         - new_y: New y position of object, to update Kalman Filter
@@ -152,51 +154,60 @@ class ObjectAssociation(object):
         ''' 
         _, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
         
-        kf = obj.kalman_filter            
+        kf = self.unified.obj_desc[parent_key].kalman_filter
 
-        if self.neighbor_manager.local_robot_is_broker():    
-            x = kf.x[0], y = kf.x[1], z = kf.x[2]
+        if self.neighbor_manager.local_robot_is_broker(): 
+            x = kf.x[0]
+            y = kf.x[1]
+            z = kf.x[2]
+            
+            print(f"Key: {parent_key}\tBroker id: {kf.broker_id}")
 
             # Future work: include rotation info
             # In this case, there are >= 1 robots in range
             if kf.broker_id == self.params['robot_id']: 
-                now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
+                x = new_x
+                y = new_y
+                z = new_z
+                # now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
                 
-                loc = Vector3(x=new_x, y=new_y, z=new_z)
+                # loc = Vector3(x=new_x, y=new_y, z=new_z)
                 
-                loc_trans = do_transform_vector3(loc, now_pose)
+                # loc_trans = do_transform_vector3(loc, now_pose)
                 
-                # Object pose
-                x = loc_trans.x + now_pose.position.x
-                y = loc_trans.y + now_pose.position.y
-                z = loc_trans.z + now_pose.position.z
+                # # Object pose
+                # x = loc_trans.x + now_pose.position.x
+                # y = loc_trans.y + now_pose.position.y
+                # z = loc_trans.z + now_pose.position.z
                 
             # If not this robot, then there are > 1 robots in range
             else: 
+                print(f"\nself.last_time_agent_entered: {self.last_time_agent_entered}\n")
                 id = self.params['robot_id']
                 last_time_entered = self.last_time_agent_entered[id]
-                broker_now_time = self.time_float_to_time(last_time_entered)
+                parent_now_time = self.time_float_to_time(last_time_entered)
                 
-                other_now_time = self.time_float_to_time(obj.time)
+                other_now_time = self.time_float_to_time(
+                    obj.header.stamp.sec + (obj.header.stamp.nanosec / 1000000000))
 
                 # Create array mapping each agent ID to its frame_id, and access here as source frame
-                broker_now_to_other_frame_then = self.tf_buffer.lookup_transform_full(
-                    self.frame_ids[id], broker_now_time, 
-                    obj.frame_id, other_now_time, 
-                    "world", Duration(seconds=0.05))
+                parent_now_to_other_frame_then = self.tf_buffer.lookup_transform_full(
+                    self.frame_ids[id], parent_now_time, 
+                    obj.header.frame_id, other_now_time, 
+                    "world", Duration(seconds=0.5))
                 
-                loc = Vector3(x=new_x, y=new_y, z=new_z)
+                loc = Vector3Stamped(vector=Vector3(x=new_x, y=new_y, z=new_z))
                 
-                loc_trans = do_transform_vector3(loc, broker_now_to_other_frame_then)
+                loc_trans = do_transform_vector3(loc, parent_now_to_other_frame_then)
                 
                 # Object pose
-                x = loc_trans.vector.x + broker_now_to_other_frame_then.transform.translation.x
-                y = loc_trans.vector.y + broker_now_to_other_frame_then.transform.translation.y
-                z = loc_trans.vector.z + broker_now_to_other_frame_then.transform.translation.z
-                                
-            measurement = np.array([x, y, z, 0.0, 0.0, 0.0])
+                x = loc_trans.vector.x + parent_now_to_other_frame_then.transform.translation.x
+                y = loc_trans.vector.y + parent_now_to_other_frame_then.transform.translation.y
+                z = loc_trans.vector.z + parent_now_to_other_frame_then.transform.translation.z
+
+            measurement = np.array([x, y, z])
             kf.predict(dt)
-            kf.update(measurement, obj.curr_conf)
+            kf.update(measurement, obj.curr_confidence)
 
     def time_float_to_time(self, val): 
         sec = math.floor(val)
@@ -263,6 +274,9 @@ class ObjectAssociation(object):
             second = abbreviated[i + 1] # robot 1
                         
             for j in reversed(first): # j, k are string keys
+                if j not in self.unified.obj_desc: # clustered already 
+                    continue
+
                 j_info = self.unified.obj_desc[j]
                 
                 if j_info.time > latest_msg_time: 
@@ -274,6 +288,9 @@ class ObjectAssociation(object):
                 
                 heap = []
                 for k in reversed(second): 
+                    if k not in self.unified.obj_desc: # clustered already
+                        continue
+                    
                     k_info = self.unified.obj_desc[k]
 
                     if k_info.time > latest_msg_time: 
@@ -291,10 +308,10 @@ class ObjectAssociation(object):
                                                           k_info.frame_id, k_info.time, 
                                                           k_info.kalman_filter)
                     
-                    # Temp removed to test feature description + union - TODO re-add
+                    # Has bug of transform requiring extrapolation into the past --> TODO fix
                     print(f"Check odom: {check_odom}")
-                    # if not check_odom: 
-                    #     continue
+                    if not check_odom: 
+                        continue
                     
                     # Assume there's only one bounding box around any given object, due to NMS working perfectly
                     check_feature_desc = self.check_features(j_info.feature_desc, k_info.feature_desc)
@@ -343,7 +360,8 @@ class ObjectAssociation(object):
                 traceback.print_exc()
 
 
-    # Untested with blocking duration 0.5
+    # Blocking duration is arbitrarily chosen to reduce chance of getting extrapolation into the future 
+    # errors, can be changed
     def check_same_location(self, 
                             r0_frame_id, r0_time, r0_kf, 
                             r1_frame_id, r1_time, r1_kf): 
@@ -359,7 +377,7 @@ class ObjectAssociation(object):
             r0_when = self.time_float_to_time(r0_time)
             
             broker_now_to_r0_frame_then = self.tf_buffer.lookup_transform_full(
-                self.frame_ids[id], Time(0), # was broker_now_time
+                self.frame_ids[id], broker_now_time, # was Time()
                 r0_frame_id, r0_when, 
                 "world", Duration(seconds=0.5))
             
@@ -384,7 +402,7 @@ class ObjectAssociation(object):
             r1_when = self.time_float_to_time(r1_time)
             
             broker_now_to_r1_frame_then = self.tf_buffer.lookup_transform_full(
-                self.frame_ids[id], Time(0), # was broker_now_time 
+                self.frame_ids[id], broker_now_time, # was Time() 
                 r1_frame_id, r1_when, 
                 "world", Duration(seconds=0.5))
             

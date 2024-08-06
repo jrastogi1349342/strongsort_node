@@ -22,7 +22,7 @@ def launch_setup(context, *args, **kwargs):
                     'name_space': LaunchConfiguration('name_space'), 
                     "robot_id": LaunchConfiguration('robot_id'), 
                     "max_nb_robots": LaunchConfiguration('max_nb_robots'), 
-                    "show_video": False
+                    "show_video": True
                  }
             ], 
         )

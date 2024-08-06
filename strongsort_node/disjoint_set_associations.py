@@ -117,7 +117,17 @@ class DisjointSetAssociations:
             self.delete(yset)
                 
     def delete(self, key): 
-        del self.rank[key], self.obj_desc[key], self.is_parent[key]
+        '''Delete most costly information about nodes that are not necessary anymore \n
+        Child nodes have already been deleted, which is the reason for the if statements
+        '''
+        if key in self.rank: 
+            del self.rank[key]
+            
+        if key in self.obj_desc: 
+            del self.obj_desc[key]
+            
+        if key in self.is_parent: 
+            del self.is_parent[key]
         
     def get_parents_keys(self): 
         return [key for key, value in self.is_parent.items() if value]
