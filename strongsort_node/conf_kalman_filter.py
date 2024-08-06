@@ -8,7 +8,7 @@ class ConfidenceBasedKalmanFilter():
         self.last_updated_time = update_time
         
         self.x = np.array([x_init, y_init, z_init, 0.0, 0.0, 0.0])
-        self.P = np.eye(6) * 0.1 # system noise
+        self.P = np.eye(6) * 1.5 # system noise
         self.H = np.eye(3, 6) # update_mat
         self.F = np.eye(6) # motion_mat
         self.Q = np.eye(6) # process noise
@@ -21,15 +21,15 @@ class ConfidenceBasedKalmanFilter():
                 
         # Very hacky
         std_pos = [
-            self.x[0] / 5.0, 
-            self.x[1] / 5.0, 
-            self.x[2] / 5.0
+            self.x[0] / 4.0, 
+            self.x[1] * 2.0, 
+            self.x[2] * 2.0
         ]
         
         std_vel = [
-            self.x[0] / 10.0, 
-            self.x[1] / 10.0, 
-            self.x[2] / 10.0
+            self.x[0] / 6.0, 
+            self.x[1] * 2.0, 
+            self.x[2] * 2.0
         ]
         
         self.Q = np.diag(np.square(np.r_[std_pos, std_vel]))
@@ -39,9 +39,9 @@ class ConfidenceBasedKalmanFilter():
         
     def project(self, confidence=0.0): 
         std_pos = [
-            self.x[0] / 20.0, 
-            self.x[1] / 20.0, 
-            self.x[2] / 20.0
+            self.x[0], 
+            self.x[1] * 1.5, 
+            self.x[2] * 1.5
         ]
         
         std_pos = [(1 - confidence) * x for x in std_pos]
@@ -53,9 +53,9 @@ class ConfidenceBasedKalmanFilter():
         
     def project_obj(self, mean, cov, confidence=0.0): 
         std_pos = [
-            mean[0] / 20.0, 
-            mean[1] / 20.0, 
-            mean[2] / 20.0
+            mean[0], 
+            mean[1] * 1.5, 
+            mean[2] * 1.5
         ]
         
         std_pos = [(1 - confidence) * x for x in std_pos]

@@ -159,6 +159,6 @@ class DisjointSetAssociations:
             return self.obj_desc[parent_key].obj_id
         else: 
             if robot_id in self.obj_desc[parent_key].children: 
-                return self.obj_desc[parent_key].children[robot_id].split(".", 1)[1]
+                return int(self.obj_desc[parent_key].children[robot_id].split(".", 1)[1])
             else: 
                 return -1

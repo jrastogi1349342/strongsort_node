@@ -18,8 +18,6 @@ import math
 import heapq
 import numpy as np
 from numpy.linalg import norm
-# from scipy.spatial.transform import Rotation as R
-# from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial import distance
 import traceback
 
@@ -80,7 +78,7 @@ class ObjectAssociation(object):
                     self.unified.insert(obj, key, new_time)
                 else: # In disjoint set somewhere 
                     dt = new_time - self.unified.obj_desc[parent].time
-                    self.update_association_info(obj, parent, new_time, dt)
+                    self.update_association_info(obj, parent, key, new_time, dt)
                     
                     # Perhaps fixed bug, figure out when using kalman filter
                     if parent in not_seen_clusters: 
@@ -98,10 +96,10 @@ class ObjectAssociation(object):
                 self.delete_association_tree(not_seen_keys)
                 
             else: 
-                # TODO revert comments and debug
+                # TODO debug
                 kf = self.unified.obj_desc[not_seen_keys].kalman_filter
                 kf_dt = new_time - kf.last_updated_time
-                # kf.predict(kf_dt)
+                kf.predict(kf_dt)
                 kf.last_updated_time = new_time
             
         print(f"Unified: {self.unified.get_all_clustered_keys()}")
@@ -117,7 +115,7 @@ class ObjectAssociation(object):
 
         self.unified.delete(parent)
         
-    def update_association_info(self, obj, parent_key, curr_time, dt): 
+    def update_association_info(self, obj, parent_key, child_key, curr_time, dt): 
         '''Assuming the key already exists in the set (i.e. was already added to the disjoint set):\n
         Update time, location
         '''
@@ -127,26 +125,21 @@ class ObjectAssociation(object):
         if obj.max_confidence > obj_desc.descriptor_conf: 
             obj_desc.descriptor_conf = obj.max_confidence
             obj_desc.feature_desc = list(obj.best_descriptor)
-            
-        # print(f"Updated position: \tx: {obj.rel_x}\ty: {obj.rel_y}\tz: {obj.rel_z}")
-            
+                        
         obj_desc.kalman_filter.last_updated_time = curr_time
-            
-        obj_desc.kalman_filter.x[0] = obj.rel_x
-        obj_desc.kalman_filter.x[1] = obj.rel_y
-        obj_desc.kalman_filter.x[2] = obj.rel_z
-                    
-        # TODO remove above x, y, z assignment and debug this
-        # self.full_kf(obj, parent_key, dt, obj.rel_x, obj.rel_y, obj.rel_z)
+                                
+        # TODO debug 
+        self.full_kf(obj, parent_key, child_key, dt, obj.rel_x, obj.rel_y, obj.rel_z)
                 
     # TODO debug, and update to how check_same_location and single_agent_location_test are written
-    def full_kf(self, obj, parent_key, dt, new_x, new_y, new_z):
+    def full_kf(self, obj, parent_key, child_key, dt, new_x, new_y, new_z):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
         NOTE: this implementation is unstable in cases where the lowest ID in range changes dynamically, and 
         may have some multithreading bugs between this and the clustering algorithm
         - obj: ObjectDescription object
         - parent_key: Key of parent node in this cluster
+        - child_key: Key of child node in this cluster
         - dt: Change in time between last application of KF and now
         - new_x: New x position of object, to update Kalman Filter
         - new_y: New y position of object, to update Kalman Filter
@@ -154,14 +147,15 @@ class ObjectAssociation(object):
         ''' 
         _, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
         
-        kf = self.unified.obj_desc[parent_key].kalman_filter
+        obj_desc = self.unified.obj_desc[parent_key]
+        kf = obj_desc.kalman_filter
 
         if self.neighbor_manager.local_robot_is_broker(): 
             x = kf.x[0]
             y = kf.x[1]
             z = kf.x[2]
             
-            print(f"Key: {parent_key}\tBroker id: {kf.broker_id}")
+            # print(f"Child key: {child_key}\tParent key: {parent_key}\tBroker id: {kf.broker_id}")
 
             # Future work: include rotation info
             # In this case, there are >= 1 robots in range
@@ -169,20 +163,10 @@ class ObjectAssociation(object):
                 x = new_x
                 y = new_y
                 z = new_z
-                # now_pose = self.pose_dict[f'{obj.robot_id}.{self.last_time_agent_entered[obj.robot_id]}']
-                
-                # loc = Vector3(x=new_x, y=new_y, z=new_z)
-                
-                # loc_trans = do_transform_vector3(loc, now_pose)
-                
-                # # Object pose
-                # x = loc_trans.x + now_pose.position.x
-                # y = loc_trans.y + now_pose.position.y
-                # z = loc_trans.z + now_pose.position.z
                 
             # If not this robot, then there are > 1 robots in range
-            else: 
-                print(f"\nself.last_time_agent_entered: {self.last_time_agent_entered}\n")
+            elif child_key in obj_desc.children: 
+                print(f"\nChild entering kalman filter info for parent node\n")
                 id = self.params['robot_id']
                 last_time_entered = self.last_time_agent_entered[id]
                 parent_now_time = self.time_float_to_time(last_time_entered)
@@ -428,8 +412,8 @@ class ObjectAssociation(object):
             if self.params['sort.location_dist_metric'] == "bhattacharyya": 
                 dist = gaussian_bhattacharyya(r0_obj_loc, r0_cov, r1_obj_loc, r1_cov, True)
                 
-                print(f"""Distance between obj from r0 ({r0_obj_loc}) and 
-                    r1 ({r1_obj_loc}) using Bhattacharyya bound: {dist}\n\n\n""")
+                print(f"""Distance between obj from {r0_frame_id} ({r0_obj_loc}; {r0_cov}) and 
+                    {r1_frame_id} ({r1_obj_loc}; {r1_cov}) using Bhattacharyya bound: {dist}\n\n\n""")
                 
                 is_valid = 1 if dist < self.params['sort.bhattacharyya_location_epsilon'] else 0
             elif self.params['sort.location_dist_metric'] == "euclidean":
@@ -460,11 +444,15 @@ class ObjectAssociation(object):
     def unify_clustered_objects(self, neighbors_in_range_list): 
         '''Creates unified labeling for all clusters and publishes it: \n
         If broker has already seen the value, set that as the unified object ID; 
-        otherwise set it to a negative value that gets incremented constantly
+        otherwise set it to a negative value that gets incremented constantly\n
+        NOTE: ID unification where the broker hasn't seen the object is unstable in the case of 
+        the broker swapping dynamically
         '''        
         unified_mapping = {} # Key: {robot_id}; Value: {Key: {obj_id}; Value: {unified_obj_id}}
         for id in neighbors_in_range_list: 
             unified_mapping[id] = {}
+            
+        print(f"unified_mapping before: {unified_mapping}")
             
         # This will construct the unified IDs where the broker hasn't seen the object before
         # Decrement by 1 for each new object
@@ -478,18 +466,22 @@ class ObjectAssociation(object):
             if obj_id_from_broker == -1: 
                 for cluster_key in all_keys_in_cluster: 
                     info_arr = cluster_key.split(".", 1)
-                    if info_arr[0] in neighbors_in_range_list: 
-                        unified_mapping[info_arr[0]].update({info_arr[1]: unified_id_no_broker})
+                    print(f"Key for non-present broker: {info_arr[0]}.{info_arr[1]}")
+                    # if info_arr[0] in neighbors_in_range_list: 
+                    unified_mapping[int(info_arr[0])].update({int(info_arr[1]): unified_id_no_broker})
                         
                 unified_id_no_broker -= 1
             else: 
                 for cluster_key in all_keys_in_cluster: 
                     info_arr = cluster_key.split(".", 1)
-                    if info_arr[0] in neighbors_in_range_list: 
-                        unified_mapping[info_arr[0]].update({info_arr[1]: obj_id_from_broker})
+                    print(f"Key for present broker: {info_arr[0]}.{info_arr[1]}")
+                    # if info_arr[0] in neighbors_in_range_list: 
+                    unified_mapping[int(info_arr[0])].update({int(info_arr[1]): obj_id_from_broker})
+                        
+        print(f"unified_mapping after: {unified_mapping}")
         
         for robot_id, mapping in unified_mapping.items(): 
-            obj_ids = list(mapping.keys())            
+            obj_ids = list(mapping.keys())
             unified_obj_ids = list(mapping.values())
             
             self.unified_publishers_arr[robot_id].publish(UnifiedObjectIDs(
