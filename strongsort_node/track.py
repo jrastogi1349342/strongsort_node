@@ -168,7 +168,7 @@ class StrongSortPublisher(object):
     def get_depth(self, depth_msg, left_cam_info_msg): 
         img = self.bridge.imgmsg_to_cv2(depth_msg, "mono8")
         
-        focal_len = 4.87 # mm +/- 5% (of one grayscale camera --> not sure if this is needed)
+        # focal_len = 4.87 # mm +/- 5% (of one grayscale camera --> not sure if this is needed)
         
         
         baseline_dist = 0.0986 # meters (distance between the two stereo cameras)
@@ -413,7 +413,7 @@ class StrongSortPublisher(object):
             header=Header(stamp=stamp), 
             descriptors=list(self.results_dict.values())))
         
-        self.results_dict.clear()        
+        self.results_dict.clear()
         
     def broadcast_transform_callback(self): 
         '''Send callback relating transform from agent 1 to agent 2 
@@ -460,19 +460,3 @@ class StrongSortPublisher(object):
         if msg.robot_id == self.params['robot_id']: 
             for i in range(len(msg.obj_ids)): 
                 self.unified_id_mapping.update({msg.obj_ids[i]: msg.unified_obj_ids[i]})
-                
-
-    # Callback for commented out ApproximateTimeSynchronizer
-    def depth_scratch_sync_callback(self, left_img_msg, right_img_msg): 
-        left_img = self.bridge.imgmsg_to_cv2(left_img_msg, "mono8")
-        right_img = self.bridge.imgmsg_to_cv2(right_img_msg, "mono8")
-        
-        left = pil_image.fromarray(left_img)
-        left.save(f"/home/jrastogi/Documents/test_imgs_videos/hololens/rectified_stereo/left_{self.i:03}.png") # this works, just change path to desired
-
-        right = pil_image.fromarray(right_img)
-        right.save(f"/home/jrastogi/Documents/test_imgs_videos/hololens/rectified_stereo/right_{self.i:03}.png") # this works, just change path to desired
-        print(f"Saved frame {self.i}")
-
-        self.i += 1
-        

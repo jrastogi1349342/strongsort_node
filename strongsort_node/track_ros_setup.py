@@ -168,19 +168,7 @@ class StrongSortSetup(Node):
                 depth=5, 
             )
         )
-         
-        #  Colocalization will eventually go here
-        
-        other_hl2_img_sync = message_filters.Subscriber(self, 
-                                        Image, 
-                                        f"/B{self.strongsort_params['video_topic']}", 
-                                        qos_profile=rclpy.qos.QoSProfile(
-                                            reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-                                            history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-                                            durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-                                            depth=5, 
-                                            )
-                                        )
+                 
                                         
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [video_sub_sync, depth_sub_sync, cam_info_sync, odom_sync], 
@@ -189,74 +177,9 @@ class StrongSortSetup(Node):
             allow_headerless=True)
         self.ts.registerCallback(self.mot_publishers.video_callback)
 
-        # Timer to broadcast transform from A to B
+        # Timer to broadcast transforms from 'world' to A and B
         self.A_to_B = self.create_timer(0.025, self.mot_publishers.broadcast_transform_callback, clock=Clock())
         
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.ts_imgs = message_filters.ApproximateTimeSynchronizer(
-            [video_sub_sync, other_hl2_img_sync], # A is first, B is second
-            queue_size=10, 
-            slop=0.5, 
-            allow_headerless=True)
-        # self.ts_imgs.registerCallback(self.tf_callback_test)
-
-        
-        # self.ts_odom = message_filters.ApproximateTimeSynchronizer(
-        #     [odom_sync], 
-        #     queue_size=10, 
-        #     slop=0.5, 
-        #     allow_headerless=True)
-        # self.ts_odom.registerCallback(self.odom_to_rpy)
-        
-        # left_img_sync = message_filters.Subscriber(
-        #     self, 
-        #     Image, 
-        #     "/hl2/stereo/left/image_rect", 
-        #     qos_profile=rclpy.qos.QoSProfile(
-        #         reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-        #         history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-        #         durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-        #         depth=5, 
-        #     )
-        # )
-        
-        # right_img_sync = message_filters.Subscriber(
-        #     self, 
-        #     Image, 
-        #     "/hl2/stereo/right/image_rect", 
-        #     qos_profile=rclpy.qos.QoSProfile(
-        #         reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
-        #         history=rclpy.qos.HistoryPolicy.KEEP_LAST,
-        #         durability=rclpy.qos.DurabilityPolicy.VOLATILE,
-        #         depth=5, 
-        #     )
-        # )
-        
-        # self.ts_scratch = message_filters.ApproximateTimeSynchronizer([left_img_sync, right_img_sync], queue_size=10, slop=0.5, allow_headerless=True)
-        # self.ts_scratch.registerCallback(self.mot_publishers.depth_scratch_sync_callback)
-        # self.i = 1
-        
-    def odom_to_rpy(self, msg): 
-        odom_quat = msg.pose.pose.orientation
-        odom_rot_mtx = R.from_quat([odom_quat.x, odom_quat.y, odom_quat.z, odom_quat.w])
-
-        print(odom_rot_mtx.as_euler("xyz", degrees=True))
-        
-
-        
-    def tf_callback_test(self, A_msg, B_msg): 
-        try: 
-            t = self.tf_buffer.lookup_transform(A_msg.header.frame_id, 
-                B_msg.header.frame_id, 
-                rclpy.time.Time()
-            )
-
-            print(t.transform.translation)
-            print(t.transform.rotation)
-            print("\n")
-        except Exception as e:
-            print(f"Error: {e}\n")
         
 if __name__ == '__main__':
     rclpy.init(args=None)

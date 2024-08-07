@@ -53,6 +53,10 @@ class ObjectAssociation(object):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self.node)
         
+        # This will construct the unified IDs where the broker hasn't seen the object before
+        # Decrement by 1 for each new object
+        self.unified_id_no_broker = -1
+        
         # Goes to all robots but only the robot with the right robot ID uses it for anything
         self.unified_publishers_arr = {}
         for id in range(self.params['max_nb_robots']): 
@@ -128,10 +132,8 @@ class ObjectAssociation(object):
                         
         obj_desc.kalman_filter.last_updated_time = curr_time
                                 
-        # TODO debug 
         self.full_kf(obj, parent_key, child_key, dt, obj.rel_x, obj.rel_y, obj.rel_z)
                 
-    # TODO debug, and update to how check_same_location and single_agent_location_test are written
     def full_kf(self, obj, parent_key, child_key, dt, new_x, new_y, new_z):
         '''Applies Kalman Filter to all objects, to account for an increased amount of time between
         the last guaranteed information and now\n
@@ -145,8 +147,6 @@ class ObjectAssociation(object):
         - new_y: New y position of object, to update Kalman Filter
         - new_z: New z position of object, to update Kalman Filter
         ''' 
-        _, neighbors_in_range_list = self.neighbor_manager.check_neighbors_in_range()
-        
         obj_desc = self.unified.obj_desc[parent_key]
         kf = obj_desc.kalman_filter
 
@@ -166,7 +166,7 @@ class ObjectAssociation(object):
                 
             # If not this robot, then there are > 1 robots in range
             elif child_key in obj_desc.children: 
-                print(f"\nChild entering kalman filter info for parent node\n")
+                # print(f"\nChild entering kalman filter info for parent node\n")
                 id = self.params['robot_id']
                 last_time_entered = self.last_time_agent_entered[id]
                 parent_now_time = self.time_float_to_time(last_time_entered)
@@ -287,9 +287,9 @@ class ObjectAssociation(object):
                     
                     # r0_frame_id, r0_id, r0_time, r0_kalman_filter, 
                     # r1_frame_id, r1_id, r1_time, r1_kalman_filter, 
-                    check_odom = self.check_same_location(j_info.frame_id, j_info.time, 
+                    check_odom = self.check_same_location(j, j_info.frame_id, j_info.time, 
                                                           j_info.kalman_filter, 
-                                                          k_info.frame_id, k_info.time, 
+                                                          k, k_info.frame_id, k_info.time, 
                                                           k_info.kalman_filter)
                     
                     # Has bug of transform requiring extrapolation into the past --> TODO fix
@@ -347,8 +347,8 @@ class ObjectAssociation(object):
     # Blocking duration is arbitrarily chosen to reduce chance of getting extrapolation into the future 
     # errors, can be changed
     def check_same_location(self, 
-                            r0_frame_id, r0_time, r0_kf, 
-                            r1_frame_id, r1_time, r1_kf): 
+                            r0_str, r0_frame_id, r0_time, r0_kf, 
+                            r1_str, r1_frame_id, r1_time, r1_kf): 
         '''Check if location of object is same between two robots and two timestamps\n
         Convention is that translations are applied before rotations in Transform messages\n
         NOTE: won't scale if A is not present in range
@@ -411,9 +411,12 @@ class ObjectAssociation(object):
             is_valid = 0
             if self.params['sort.location_dist_metric'] == "bhattacharyya": 
                 dist = gaussian_bhattacharyya(r0_obj_loc, r0_cov, r1_obj_loc, r1_cov, True)
+
+                # print(f"""Distance between obj from {r0_str} and 
+                #     {r1_str} using Bhattacharyya bound: {dist}\n\n\n""")
                 
-                print(f"""Distance between obj from {r0_frame_id} ({r0_obj_loc}; {r0_cov}) and 
-                    {r1_frame_id} ({r1_obj_loc}; {r1_cov}) using Bhattacharyya bound: {dist}\n\n\n""")
+                print(f"""Distance between obj from {r0_str} ({r0_obj_loc}; {r0_cov}) and 
+                    {r1_str} ({r1_obj_loc}; {r1_cov}) using Bhattacharyya bound: {dist}\n\n\n""")
                 
                 is_valid = 1 if dist < self.params['sort.bhattacharyya_location_epsilon'] else 0
             elif self.params['sort.location_dist_metric'] == "euclidean":
@@ -454,10 +457,6 @@ class ObjectAssociation(object):
             
         print(f"unified_mapping before: {unified_mapping}")
             
-        # This will construct the unified IDs where the broker hasn't seen the object before
-        # Decrement by 1 for each new object
-        unified_id_no_broker = -1
-        
         parents = self.unified.get_parents_keys()
         for key in parents: 
             all_keys_in_cluster = self.unified.get_keys_in_cluster(key)
@@ -468,9 +467,9 @@ class ObjectAssociation(object):
                     info_arr = cluster_key.split(".", 1)
                     print(f"Key for non-present broker: {info_arr[0]}.{info_arr[1]}")
                     # if info_arr[0] in neighbors_in_range_list: 
-                    unified_mapping[int(info_arr[0])].update({int(info_arr[1]): unified_id_no_broker})
+                    unified_mapping[int(info_arr[0])].update({int(info_arr[1]): self.unified_id_no_broker})
                         
-                unified_id_no_broker -= 1
+                self.unified_id_no_broker -= 1
             else: 
                 for cluster_key in all_keys_in_cluster: 
                     info_arr = cluster_key.split(".", 1)
