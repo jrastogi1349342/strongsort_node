@@ -2,7 +2,7 @@
 
 
 
-## Description
+## Description and Design Considerations
 
 This repository contains a highly configurable multi-agent two-stage-tracker, accounting for inter-agent object associations, with communication through ROS2 Humble. It requires the `strongsort_msgs` package, linked [here](https://github.com/jrastogi1349342/strongsort_msgs), which contains the custom messages used for communication. The pipeline works as follows: 
 
@@ -13,6 +13,10 @@ This repository contains a highly configurable multi-agent two-stage-tracker, ac
         * Disparity map from the stereo cameras: `{namespace}/stereo/depth` topic
         * Camera info of left stereo camera: `{namespace}/stereo/left/camera_info` topic
         * Odometry: `{namespace}/odom` topic
+    * On the Hololens 2, all cameras are grayscale. I used numpy to stack the channels to the correct dimension for YOLOv7. However, this 'hack' has experimentally has shown poor performance for smaller objects, especially ones that are against a similar-colored background. Future work includes training an object detection model designed for grayscale images, and using more relevant ontologies than the Microsoft COCO dataset. 
+        * Note that the depth, yaw, and pitch calculations are specifically written for the Hololens 2. 
+    * The StrongSORT + OSNet object tracking pipeline seems to lose occluded objects within a few seconds. This becomes a problem with my clustering pipeline, due to my assumption that "Each agent only has one track for each detected object" (assumption 4 of the clustering process, seen below). Future work includes integrating features from other multi-object tracking pipelines to improve the tracking quality. 
+        * I have not tested its performance against partially or completely camouflaged objects. Future work includes testing this performance and if it performs poorly, finding or developing improvements. 
     * I did not use LiDaR or GPS information because I assumed agents would be operating in constrained environments. For agents that have a reliable LiDaR, such as the Vision 60, future work involves integrating camera and LiDaR depth information for more reliable object tracking. 
     * For the depth information from camera-only systems, I assume that the disparity map is created with the parameter `stereoParams.maxDisparity = 48` in the VPI Stereo Disparity calculation. This provides a reasonably accurate distance calculation from approximately 0.3 to 3 meters. By reducing the value of the `maxDisparity` parameter, the minimum and maximum detectable distance increase; I did not test the max distance it can accurately detect. Future work includes potentially calculating the disparity multiple times, using a different `maxDisparity` value, to cover a broader range of distances. 
         * I use the median of the distances to each pixel on the object (image cropped to the bounding box) to reduce outliers. Future work may involve using segmentation techniques to increase accuracy and robustness. 
@@ -28,7 +32,7 @@ This repository contains a highly configurable multi-agent two-stage-tracker, ac
     * I use the same neighbor management module as the Swarm SLAM repository, though I assumed that all agents would remain in range at all times. Future work involves being more faithful to the original Swarm SLAM  repository to accurately send all messages to all other agents, regardless of if they are in range or out of range of any other subset of agents at any time. 
     * I implemented two different strategies for broker selection: 
         * Highest `robot_id` in range
-            * Swarm SLAM uses the lowest `robot_id` in range, and since the computationally expensive part in both algorithms requires at least two agents, this guarantees the brokers are not the same for Swarm SLAM and 
+            * Swarm SLAM uses the lowest `robot_id` in range, and since the computationally expensive part in both algorithms requires at least two agents, this guarantees the brokers are not the same for Swarm SLAM and this repository. 
         * Most CPU usage available
             * The clustering process is currently primarily CPU intensive. It is not parallelized, and each agent already has the detections in RAM. 
     * I chose a Disjoint Set data structure because each detection cannot be associated with multiple agents at once. 
@@ -41,13 +45,17 @@ This repository contains a highly configurable multi-agent two-stage-tracker, ac
         * If the specific detection is not spotted in one frame, I run the `predict` function of the Kalman Filter to simulate the object's location in space at that timeframe. 
     * The assumptions made in the clustering process are very rigid and 'perfect', as shown below: 
         * Every class is extremely different from every other class. 
-            * This implies that if two detections of the same object have different class labels (which happens occasionally), they cannot be clustered together. Future work involves using metric learning to compute a metric of how similar two classes are. 
+            * This implies that if two detections of the same object have different class labels (which happens occasionally), they cannot be clustered together. Future work involves using metric learning to compute a metric of how similar two classes are. Alternatively, you may be able to use a vision-language model to develop a semantic understanding of the object, and its associated properties (i.e. size, location, etc). 
         * Co-localization is extremely accurate. 
             * I currently have not seen how good co-localization is, so I don't know if this is a valid assumption or not. Future work involves testing the capabilities of co-localization. If it isn't enough, the distance metrics will have to be tuned accordingly, or adjusted to a function of distance from the other agent. 
         * Objects look similar from all angles. 
             * The front and back of a person look very different from each other, so they wouldn't be matched properly. Future work involves somehow adding invariance to object orientation for the purpose of object tracking, if possible. 
+        * Each agent only has one track for each detected object. 
+            * In practice, StrongSORT inevitably loses and re-intializes a track for each object, due to occlusions, so the re-added track cannot be clustered as the same object. Future work includes accounting for this assumption. 
 
+Note that this is only one step in the robot's stack for collaborative human-robot interaction, so it needs to be very robust and efficient. As a result, inter-agent communication needs to be decentralized. The next step on the stack would be classifying subsets of the clustered tracks as threats/not threats, through Action Detection, semantic understanding of the tracked checks, and/or some other technique(s). 
 
+There may be other design decisions that I forgot to include. If you are wondering about why I did something, please email me at jai1rastogi@gmail.com. 
 
 ## Known Unaddressed Edge Cases
 * YOLO occasionally jitters and provides a detection for one frame that doesn't match the others. This gets propagated in my clustering algorithm, and future work includes post-detection sanity checks to reduce the chance of object mis-detections. 
@@ -58,6 +66,8 @@ This repository contains a highly configurable multi-agent two-stage-tracker, ac
 
 Note that there might be more edge cases. 
 
+## Future Work for this Project
+Use a find feature (i.e. Ctrl-F) to search the term "future work" under the "Description and Design Considerations" heading. I listed many different potential approaches, which vary between the level of an undergraduate and someone with a masters/PhD. 
 
 ## Installation Instructions
 
@@ -83,100 +93,59 @@ If you already cloned `strongsort_node` and forgot to use `--recurse-submodules`
 3) For each Hololens, run the following command from your `{ros_ws}`: 
 `ros2 launch strongsort_node strongsort_node_launch.py name_space:={namespace} robot_id:={robot_id} max_nb_robots:={max_robots}`
 
-Here is an example, using 2 agents: 
+Here is an example, using 2 agents on my laptop: 
 1) The IP addresses of the two Hololenses are 131.218.141.219 and 131.218.141.231. 
-2) Open the Dev Container, and run the following commands, each from the dev container: 
+2) Open the Dev Container, and run the following commands, each in a different bash shell (e.g. `dev@arl-Precision-7760:/home/ws$`) in the dev container: 
     1) `ros2 launch holo_ros hololens_driver.launch.py host:=131.218.141.231 namespace:=A`
     2) `ros2 launch holo_ros hololens_driver.launch.py host:=131.218.141.219 namespace:=B`
-3) In your terminal, from your local `{ros_ws}`: 
+3) In two different terminals, from your local `{ros_ws}` (not in the dev container): 
     1) `ros2 launch strongsort_node strongsort_node_launch.py name_space:=A robot_id:=0 max_nb_robots:=2`
     2) `ros2 launch strongsort_node strongsort_node_launch.py name_space:=B robot_id:=1 max_nb_robots:=2`
 
 
----------------Changed up to here----------------
-
-
 ## Tracking sources
 
-Tracking can be run on most video formats
-
-```bash
-$ python track.py --source 0  # webcam
-                           img.jpg  # image
-                           vid.mp4  # video
-                           path/  # directory
-                           path/*.jpg  # glob
-                           'https://youtu.be/Zgi9g1ksQHc'  # YouTube
-                           'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
-```
+In the `parameters` list in `strongsort_node_list.py`, change `video_topic` to the desired ROS2 topic. If you want to add new parameters and pass them to the pipeline, feel free to do so. You can also let the user add parameter values from the launch command directly if desired; an example of this is `name_space:=B` (i.e., the name space is set to "B"). 
 
 
 ## Select object detection and ReID model
 
-### Yolov7
+The first time you run the overall system, as above, the `.pt` file for YOLOv7 and StrongSORT will be downloaded to your `{ros_ws}` directory. 
 
-There is a clear trade-off between model inference speed and accuracy. In order to make it possible to fulfill your inference speed/accuracy needs
-you can select a Yolov7 family model for automatic download
+### YOLOv7
 
-```bash
+The default YOLOv7 model is `yolov7.pt`. If you want to use a different version, change the `parameters` list by adding the `yolo_weights` key and your desired YOLOv7 family model. It will be automatically downloaded. 
 
-
-$ python track.py --source 0 --yolo-weights yolov7.pt --img 640
-                                            yolov7x.pt --img 640
-                                            yolov7-e6e.pt --img 1280
-                                            ...
-```
+Note that there is a clear trade-off between model inference speed and accuracy.
 
 ### StrongSORT
 
-The above applies to StrongSORT models as well. Choose a ReID model based on your needs from this ReID [model zoo](https://kaiyangzhou.github.io/deep-person-reid/MODEL_ZOO)
-
-```bash
-
-
-$ python track.py --source 0 --strong-sort-weights osnet_x0_25_market1501.pt
-                                                   osnet_x0_5_market1501.pt
-                                                   osnet_x0_75_msmt17.pt
-                                                   osnet_x1_0_msmt17.pt
-                                                   ...
-```
+The above applies to StrongSORT models as well. The default StrongSORT ReID model is `osnet_x0_25_msmt17.pt`. If you want to use a different version, choose a ReID model [model zoo](https://kaiyangzhou.github.io/deep-person-reid/MODEL_ZOO), and change the `parameters` list by using the `strong_sort_weights` key. 
 
 
 ## Filter tracked classes
 
 By default the tracker tracks all MS COCO classes.
 
-If you want to track a subset of the MS COCO classes, add their corresponding index after the classes flag
-
-```bash
-python track.py --source 0 --yolo-weights yolov7.pt --classes 16 17  # tracks cats and dogs, only
-```
+If you want to track a subset of the MS COCO classes, add an array with all desired class numbers to the `classes` key in the `parameters` list. 
 
 [Here](https://tech.amikelive.com/node-718/what-object-categories-labels-are-in-coco-dataset/) is a list of all the possible objects that a Yolov7 model trained on MS COCO can detect. Notice that the indexing for the classes in this repo starts at zero.
 
 
-## MOT compliant results
+## Contact for Multi-Agent Multi-Object Tracking Pipeline
+For any questions regarding multi-agent multi-object tracking, please contact Jai Rastogi at jai1rastogi@gmail.com. Please note that he may not work on this repository beyond Summer 2024. 
 
-Can be saved to your experiment folder `runs/track/<yolo_model>_<deep_sort_model>/` by 
+## Contact for StrongSORT Pipeline
 
-```bash
-python track.py --source ... --save-txt
-```
+For Yolov7 DeepSort OSNet bugs and feature requests please visit [GitHub Issues](https://github.com/mikel-brostrom/Yolov7_StrongSORT_OSNet/issues). For business inquiries or professional support requests regarding StrongSORT, please send an email to: yolov5.deepsort.pytorch@gmail.com
 
+## Sources
+[1] Berton, Gabriele, Carlo Masone, and Barbara Caputo. "Rethinking visual geo-localization for large-scale applications." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2022.
 
-## Cite
+[2] Du, Yunhao, et al. “Strongsort: Make deepsort great again.” IEEE Transactions on Multimedia 25 (2023): 8725-8737. 
 
-If you find this project useful in your research, please consider cite:
+[3] Lajoie, Pierre-Yves, and Giovanni Beltrame. "Swarm-slam: Sparse decentralized collaborative simultaneous localization and mapping framework for multi-robot systems." IEEE Robotics and Automation Letters 9.1 (2023): 475-482. 
 
-```latex
-@misc{yolov7-strongsort-osnet-2022,
-    title={Real-time multi-object tracking using YOLOv7 and StrongSORT with OSNet},
-    author={Mikel Broström},
-    howpublished = {\url{https://github.com/mikel-brostrom/Yolov7_StrongSORT_OSNet}},
-    year={2022}
-}
-```
+[4] Wang, Chien-Yao, Alexey Bochkovskiy, and Hong-Yuan Mark Liao. "YOLOv7: Trainable bag-of-freebies sets new state-of-the-art for real-time object detectors." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2023.
 
-## Contact 
-
-For Yolov7 DeepSort OSNet bugs and feature requests please visit [GitHub Issues](https://github.com/mikel-brostrom/Yolov7_StrongSORT_OSNet/issues). For business inquiries or professional support requests please send an email to: yolov5.deepsort.pytorch@gmail.com
+[5] Zhou, Kaiyang, et al. "Omni-scale feature learning for person re-identification." Proceedings of the IEEE/CVF International Conference on Computer Vision. 2019.
