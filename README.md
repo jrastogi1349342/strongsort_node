@@ -88,6 +88,8 @@ If you already cloned `strongsort_node` and forgot to use `--recurse-submodules`
 
 
 ## How to Run
+**Note that I used branch "Jason2" of holo-ros, which was pulled from the pytorch-opt branch in late June/early July.**
+
 1) Launch HL2SS on each Hololens 2, and note the IP address
 2) Open the `holo-ros` directory in the Dev Container in VS Code, and for each Hololens 2, launch `ros2 launch holo_ros hololens_driver.launch.py host:={IP address} namespace:={namespace}` from the `dev@{device}:/home/ws` directory in terminal
     1) Keep in mind that this will run the strongsort_node repository on your local machine
